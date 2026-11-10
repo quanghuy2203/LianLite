@@ -1,4 +1,5 @@
 mod update;
+mod rgb_bridge;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf, process::Command, sync::mpsc::{self, Receiver}};
@@ -64,10 +65,14 @@ fn read_lianli_processes() -> String {
     }
 }
 enum UpdateMessage { Checked(Option<update::Available>), Staged(PathBuf) }
+enum RgbMessage { Listed(String, Vec<rgb_bridge::Device>), Applied(String), UsbScanned(String) }
 struct App {
     config: Config, hid: Vec<HidEntry>, process_report: String, status: String,
     update_rx: Option<Receiver<Result<UpdateMessage, String>>>,
     available: Option<update::Available>, staged: Option<PathBuf>,
+    rgb_rx: Option<Receiver<Result<RgbMessage, String>>>, rgb_devices: Vec<rgb_bridge::Device>,
+    rgb_selected: Vec<usize>, rgb_color: [u8; 3], rgb_report: String,
+    usb_report: String,
 }
 impl Default for App {
     fn default() -> Self {
@@ -75,7 +80,9 @@ impl Default for App {
             .and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
         Self { config, hid: Vec::new(), process_report: "Not checked yet".into(),
             status: "Read-only hardware mode. No USB commands will be sent.".into(),
-            update_rx: None, available: None, staged: None }
+            update_rx: None, available: None, staged: None,
+            rgb_rx: None, rgb_devices: vec![], rgb_selected: vec![], rgb_color: [80, 140, 255],
+            rgb_report: "OpenRGB not scanned".into(), usb_report: "USB PnP not scanned".into() }
     }
 }
 impl eframe::App for App {
@@ -103,10 +110,36 @@ impl eframe::App for App {
                 }
             }
         }
+        if let Some(rx) = &self.rgb_rx {
+            match rx.try_recv() {
+                Ok(Ok(RgbMessage::Listed(report, items))) => {
+                    self.rgb_report = report;
+                    self.rgb_devices = items;
+                    self.rgb_selected.clear();
+                    self.rgb_rx = None;
+                }
+                Ok(Ok(RgbMessage::Applied(message))) => { self.status = message; self.rgb_rx = None; }
+                Ok(Ok(RgbMessage::UsbScanned(report))) => {
+                    let path = config_path().with_file_name("usb-pnp-inventory.json");
+                    self.status = match fs::create_dir_all(path.parent().unwrap())
+                        .and_then(|_| fs::write(&path, report.as_bytes())) {
+                        Ok(()) => format!("USB PnP data saved: {}", path.display()),
+                        Err(e) => format!("USB PnP export failed: {e}"),
+                    };
+                    self.usb_report = report;
+                    self.rgb_rx = None;
+                }
+                Ok(Err(e)) => { self.status = format!("Diagnostics / OpenRGB error: {e}"); self.rgb_rx = None; }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.status = "Hardware diagnostics worker stopped".into(); self.rgb_rx = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(150)),
+            }
+        }
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("LianLite 0.4  ·  Ultra Minimal");
-            ui.label("Windows 11  |  Read-only diagnostics + local profile editor");
-            ui.colored_label(egui::Color32::YELLOW, "Hardware control is NOT enabled. Keep L-Connect services running.");
+            ui.heading("LianLite 0.5  ·  Ultra Minimal");
+            ui.label("Windows 11  |  Lian Li diagnostics + optional OpenRGB LED integration");
+            ui.colored_label(egui::Color32::YELLOW, "Lian Li fan/LCD control remains disabled. Keep L-Connect services running.");
             ui.separator();
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.heading("Software updates · GitHub Releases");
@@ -151,6 +184,46 @@ impl eframe::App for App {
                     self.status = match save(&self.config) { Ok(()) => format!("Saved to {}", config_path().display()), Err(e) => e };
                 }
                 ui.separator();
+                ui.heading("Mainboard / GPU / RAM lighting · OpenRGB");
+                ui.label("Optional: OpenRGB must be installed, running with SDK Server 127.0.0.1:6742.");
+                ui.label("OpenRGB may not support every device. Avoid simultaneous RGB control from Armoury Crate.");
+                if ui.add_enabled(self.rgb_rx.is_none(), egui::Button::new("Detect OpenRGB LED devices")).clicked() {
+                    let (tx, rx) = mpsc::channel(); self.rgb_rx = Some(rx);
+                    std::thread::spawn(move || { let _ = tx.send(rgb_bridge::list().map(|(raw, devices)| RgbMessage::Listed(raw, devices))); });
+                }
+                if self.rgb_rx.is_some() { ui.spinner(); }
+                for device in &self.rgb_devices {
+                    let mut enabled = self.rgb_selected.contains(&device.index);
+                    if ui.checkbox(&mut enabled, format!("Device {} · {}", device.index, device.name)).changed() {
+                        if enabled { self.rgb_selected.push(device.index); }
+                        else { self.rgb_selected.retain(|x| *x != device.index); }
+                    }
+                }
+                let mut color = egui::Color32::from_rgb(self.rgb_color[0], self.rgb_color[1], self.rgb_color[2]);
+                if ui.color_edit_button_srgba(&mut color).changed() {
+                    self.rgb_color = [color.r(), color.g(), color.b()];
+                }
+                let can_apply = !self.rgb_selected.is_empty() && self.rgb_rx.is_none();
+                if ui.add_enabled(can_apply, egui::Button::new("Apply static color to SELECTED devices")).clicked() {
+                    let selected = self.rgb_selected.clone();
+                    let color = self.rgb_color;
+                    let (tx, rx) = mpsc::channel(); self.rgb_rx = Some(rx);
+                    std::thread::spawn(move || {
+                        let mut results = Vec::new();
+                        for device in selected {
+                            match rgb_bridge::apply_color(device, color) {
+                                Ok(_) => results.push(format!("Device {device}: command submitted")),
+                                Err(e) => {
+                                    let _ = tx.send(Err(format!("Device {device}: {e}. Earlier selected devices may already have changed.")));
+                                    return;
+                                }
+                            }
+                        }
+                        let _ = tx.send(Ok(RgbMessage::Applied(results.join("; "))));
+                    });
+                }
+                ui.collapsing("Raw OpenRGB scan", |ui| { ui.monospace(&self.rgb_report); });
+                ui.separator();
                 ui.heading("Hardware diagnostics");
                 ui.horizontal(|ui| {
                     if ui.button("Scan Lian Li HID").clicked() {
@@ -166,10 +239,15 @@ impl eframe::App for App {
                         self.status = match result { Ok(()) => format!("Exported {}", path.display()), Err(e) => e.to_string() };
                     }
                     if ui.button("Check Lian Li processes").clicked() { self.process_report = read_lianli_processes(); }
+                    if ui.add_enabled(self.rgb_rx.is_none(), egui::Button::new("Scan all Windows USB/PnP")).clicked() {
+                        let (tx, rx) = mpsc::channel(); self.rgb_rx = Some(rx);
+                        std::thread::spawn(move || { let _ = tx.send(rgb_bridge::scan_windows_usb().map(RgbMessage::UsbScanned)); });
+                    }
                 });
                 for entry in &self.hid {
                     ui.label(format!("{} {} · VID:{} PID:{} · interface {} · usage page {:04X}", entry.manufacturer, entry.product, entry.vid, entry.pid, entry.interface, entry.usage_page));
                 }
+                ui.label("Windows USB/PnP export is read-only. Includes device IDs; review JSON before sharing.");
                 ui.label("Matching process names (read-only):");
                 ui.monospace(&self.process_report);
                 ui.separator(); ui.label(&self.status);
