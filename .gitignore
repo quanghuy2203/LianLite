@@ -1,0 +1,4 @@
+/target/
+*.exe.pending
+*.exe.backup
+.DS_Store
