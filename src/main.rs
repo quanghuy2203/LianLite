@@ -1,3 +1,4 @@
+#![windows_subsystem = "windows"]
 mod update;
 mod native;
 use eframe::egui;
