@@ -14,7 +14,8 @@ pub struct WirelessGroup {
     pub kind: &'static str,
     pub fan_count: u8,
     pub fan_rpm: Vec<u16>,
-    pub verified_from_receiver: bool,
+    pub reported_by_receiver: bool,
+    pub bound_to_local_master_verified: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -23,6 +24,7 @@ pub struct LiveTopology {
     pub total_receiver_records: usize,
     pub valid_records: usize,
     pub incomplete_page: bool,
+    pub local_master_binding_verified: bool,
     pub source: &'static str,
 }
 pub fn describe_type(device_type: u8, fan_types: &[u8]) -> &'static str {
@@ -66,7 +68,8 @@ fn parse_one(data: &[u8], list_position: usize) -> Option<WirelessGroup> {
         kind,
         fan_count: if matches!(data[18], 1..=9) { 0 } else { fan_count },
         fan_rpm,
-        verified_from_receiver: true,
+        reported_by_receiver: true,
+        bound_to_local_master_verified: false,
     })
 }
 pub fn parse_getdev(response: &[u8]) -> Result<LiveTopology, String> {
@@ -92,7 +95,7 @@ pub fn parse_getdev(response: &[u8]) -> Result<LiveTopology, String> {
     let valid_records = groups.len();
     Ok(LiveTopology {
         groups, total_receiver_records: count,
-        valid_records, incomplete_page: false,
+        valid_records, incomplete_page: false, local_master_binding_verified: false,
         source: "L-Wireless V1 GetDev RX response; not a saved fan profile",
     })
 }
@@ -120,6 +123,7 @@ mod tests {
         assert_eq!(topology.groups[2].kind,"Strimer Wireless");
         assert_eq!(topology.groups[2].fan_count,0);
         assert_eq!(topology.groups[0].fan_rpm,vec![356,376]);
+        assert!(!topology.local_master_binding_verified);
         let json=serde_json::to_string(&topology).unwrap();
         assert!(!json.contains("mac"));
     }
