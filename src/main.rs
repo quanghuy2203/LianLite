@@ -276,6 +276,18 @@ impl eframe::App for App {
                     ui.monospace(&self.native_windows_json);
                 });
                 ui.separator();
+                ui.heading("Reports and logs");
+                if ui.button("Open LianLite reports folder").clicked() {
+                    let base = std::env::var_os("APPDATA").map(PathBuf::from)
+                        .unwrap_or_else(|| PathBuf::from("."));
+                    let folder = base.join("LianLite");
+                    self.status = match fs::create_dir_all(&folder)
+                        .and_then(|_| Command::new("explorer.exe").arg(&folder).spawn().map(|_| ())) {
+                        Ok(()) => "Reports folder opened in Explorer".into(),
+                        Err(e) => format!("Cannot open reports folder: {e}"),
+                    };
+                }
+                ui.separator();
                 ui.heading("Update and installation health");
                 if ui.button("Check install / updater").clicked() {
                     match health::inspect() {
