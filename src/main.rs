@@ -461,6 +461,10 @@ impl eframe::App for App {
                                         "GetDev reads real receiver group records (fan count, family, RF channel, RPM). Requires exclusive access: will refuse while L-Connect service/watchdog is running. Never stops services or adjusts fan PWM."
                                     ).color(muted));
                                     if ui.add_enabled(self.native_rx.is_none(), egui::Button::new("Probe actual RF groups (guarded)")).clicked() {
+                                        // Do not leave a previous receiver snapshot displayed if the
+                                        // next attempt is blocked or fails.
+                                        self.live_topology = None;
+                                        self.status = "Checking L-Connect ownership before optional receiver query...".into();
                                         let (tx,rx) = mpsc::channel(); self.native_rx = Some(rx);
                                         std::thread::spawn(move || {
                                             let _ = tx.send(wireless_winusb::probe().map(NativeMessage::LiveDiscovered));
