@@ -10,6 +10,7 @@ mod wireless_research;
 mod snapshot;
 mod wireless_protocol;
 mod wireless_winusb;
+mod service_discovery;
 mod backups;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
@@ -74,6 +75,7 @@ fn read_lianli_processes() -> String {
 enum UpdateMessage { Checked(Option<update::Available>), Staged(update::Staged) }
 enum NativeMessage { Scanned(Vec<native::NativeDevice>), SystemScanned(String), AuraInspected(String), DescriptorInspected(Vec<aura_descriptor::DescriptorInfo>), WirelessDiscovered(discovery::DiscoveryReport), SettingsInspected(wireless_research::ResearchReport), SurveyDone(discovery::DiscoveryReport, wireless_research::ResearchReport),
     LiveDiscovered(wireless_protocol::LiveTopology),
+    ServiceEndpoints(service_discovery::ServiceDiscovery),
     PcScanned { hid: Result<Vec<native::NativeDevice>, String>,
         system: Result<String, String>, aura: Result<String, String> } }
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -95,6 +97,7 @@ struct App {
     wireless_settings: Option<wireless_research::ResearchReport>,
     live_topology: Option<wireless_protocol::LiveTopology>,
     simulated_topology: Option<wireless_protocol::LiveTopology>,
+    service_endpoints: Option<service_discovery::ServiceDiscovery>,
     confirm_backup_cleanup: bool,
     confirm_preview_reset: bool,
 }
@@ -110,7 +113,7 @@ impl Default for App {
             update_rx: None, available: None, staged: None,
             native_rx: Some(rx), native_devices: vec![], native_windows_json: String::new(), aura_pnp_json: String::new(),
             global_color: [100,150,255], global_brightness: 70, last_summary: String::new(),
-            page: Page::Overview, aura_descriptor: Vec::new(), wireless_report: None, wireless_settings: None, live_topology: None, simulated_topology: None, confirm_backup_cleanup: false, confirm_preview_reset: false }
+            page: Page::Overview, aura_descriptor: Vec::new(), wireless_report: None, wireless_settings: None, live_topology: None, simulated_topology: None, service_endpoints: None, confirm_backup_cleanup: false, confirm_preview_reset: false }
     }
 }
 impl eframe::App for App {
@@ -152,6 +155,14 @@ impl eframe::App for App {
                 Ok(Ok(NativeMessage::AuraInspected(report))) => {
                     self.aura_pnp_json = report;
                     self.status = "ASUS Aura PnP inspection completed (read-only)".into();
+                    self.native_rx = None;
+                }
+                Ok(Ok(NativeMessage::ServiceEndpoints(info))) => {
+                    self.status = format!(
+                        "L-Connect endpoints: {} active processes, {} local TCP ports, {} named-pipe candidates. Live API not verified.",
+                        info.service_processes, info.loopback_listening_ports.len(), info.pipe_candidate_count
+                    );
+                    self.service_endpoints = Some(info);
                     self.native_rx = None;
                 }
                 Ok(Ok(NativeMessage::LiveDiscovered(topology))) => {
@@ -222,7 +233,7 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 ui.add_space(14.0);
                 ui.label(egui::RichText::new("LIANLITE").size(23.0).strong().color(cyan));
-                ui.label(egui::RichText::new("RUST NATIVE  /  v0.14").size(10.0).color(muted));
+                ui.label(egui::RichText::new("RUST NATIVE  /  v0.15").size(10.0).color(muted));
                 ui.add_space(35.0);
                 for (page, label) in [
                     (Page::Overview, "  Overview"),
@@ -263,7 +274,7 @@ impl eframe::App for App {
                         Page::Updates => "Application updates",
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new("v0.14.0").color(cyan).strong());
+                        ui.label(egui::RichText::new("v0.15.0").color(cyan).strong());
                     });
                 });
                 ui.label(egui::RichText::new(
@@ -455,6 +466,34 @@ impl eframe::App for App {
                             egui::Frame::none().fill(card).rounding(egui::Rounding::same(12.0_f32))
                                 .stroke(border).inner_margin(17.0).show(ui, |ui| {
                                     ui.heading("Native device discovery");
+                                    ui.add_space(8.0);
+                                    ui.heading("L-Connect service interfaces (safe inspection)");
+                                    ui.label(egui::RichText::new(
+                                        "Inspect only Windows process, localhost listener and named-pipe metadata; no connection, injection or service interruption."
+                                    ).color(muted));
+                                    if ui.add_enabled(self.native_rx.is_none(),
+                                        egui::Button::new("Find service communication interfaces")).clicked() {
+                                        let (tx,rx) = mpsc::channel();
+                                        self.native_rx = Some(rx);
+                                        self.service_endpoints = None;
+                                        std::thread::spawn(move || {
+                                            let _ = tx.send(service_discovery::discover()
+                                                .map(NativeMessage::ServiceEndpoints));
+                                        });
+                                    }
+                                    if let Some(info) = &self.service_endpoints {
+                                        ui.label(format!("L-Connect processes: {}", info.service_processes));
+                                        for family in &info.service_name_families {
+                                            ui.label(format!("Process type: {family}"));
+                                        }
+                                        ui.label(format!("Service-owned loopback listening ports: {:?}",
+                                            info.loopback_listening_ports));
+                                        ui.label(format!("Lian Li / L-Connect named-pipe name candidates: {}",
+                                            info.pipe_candidate_count));
+                                        ui.colored_label(egui::Color32::from_rgb(246,194,107),
+                                            "No documented or validated group-list API was found by this passive check.");
+                                    }
+                                    ui.separator();
                                     ui.add_space(8.0);
                                     ui.heading("Direct Wireless V1 receiver discovery (experimental)");
                                     ui.label(egui::RichText::new(
