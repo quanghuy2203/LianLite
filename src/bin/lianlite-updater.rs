@@ -48,16 +48,16 @@ fn run() -> Result<(), String> {
     if !staged.is_file() { return Err("Downloaded update (.pending) not found".into()); }
     let dir = target.parent().ok_or("Missing install directory")?;
     let backup = target.with_extension("exe.backup");
-    let previous = target.with_extension("exe.backup.previous");
-
-    // Never discard an existing backup. Keep an older copy separately.
+    // Older installers blocked all future updates after two backups.
+    // Rotate safely into a unique numbered backup without discarding copies.
     if backup.exists() {
-        if previous.exists() {
-            return Err(format!("Both backup files exist ({}, {}). Review them before updating.", backup.display(), previous.display()));
-        }
-        fs::rename(&backup, &previous)
-            .map_err(|e| format!("Cannot preserve existing backup: {e}"))?;
-        log("Previous backup preserved as lianlite.exe.backup.previous.");
+        let archive = (1..=64)
+            .map(|n| target.with_extension(format!("exe.backup.previous.{n}")))
+            .find(|p| !p.exists())
+            .ok_or("All 64 previous-backup slots are occupied; manual cleanup required")?;
+        fs::rename(&backup, &archive)
+            .map_err(|e| format!("Cannot preserve old backup at {}: {e}", archive.display()))?;
+        log(&format!("Existing backup safely archived to {}.", archive.display()));
     }
 
     // Windows does not allow an executing EXE to be renamed until it has exited.
