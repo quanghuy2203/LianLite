@@ -11,6 +11,7 @@ mod snapshot;
 mod wireless_protocol;
 mod wireless_winusb;
 mod service_discovery;
+mod pipe_references;
 mod backups;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
@@ -76,6 +77,7 @@ enum UpdateMessage { Checked(Option<update::Available>), Staged(update::Staged) 
 enum NativeMessage { Scanned(Vec<native::NativeDevice>), SystemScanned(String), AuraInspected(String), DescriptorInspected(Vec<aura_descriptor::DescriptorInfo>), WirelessDiscovered(discovery::DiscoveryReport), SettingsInspected(wireless_research::ResearchReport), SurveyDone(discovery::DiscoveryReport, wireless_research::ResearchReport),
     LiveDiscovered(wireless_protocol::LiveTopology),
     ServiceEndpoints(service_discovery::ServiceDiscovery),
+    PipeReferences(pipe_references::ReferenceReport),
     PcScanned { hid: Result<Vec<native::NativeDevice>, String>,
         system: Result<String, String>, aura: Result<String, String> } }
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -98,6 +100,7 @@ struct App {
     live_topology: Option<wireless_protocol::LiveTopology>,
     simulated_topology: Option<wireless_protocol::LiveTopology>,
     service_endpoints: Option<service_discovery::ServiceDiscovery>,
+    pipe_reference_report: Option<pipe_references::ReferenceReport>,
     confirm_backup_cleanup: bool,
     confirm_preview_reset: bool,
 }
@@ -113,7 +116,7 @@ impl Default for App {
             update_rx: None, available: None, staged: None,
             native_rx: Some(rx), native_devices: vec![], native_windows_json: String::new(), aura_pnp_json: String::new(),
             global_color: [100,150,255], global_brightness: 70, last_summary: String::new(),
-            page: Page::Overview, aura_descriptor: Vec::new(), wireless_report: None, wireless_settings: None, live_topology: None, simulated_topology: None, service_endpoints: None, confirm_backup_cleanup: false, confirm_preview_reset: false }
+            page: Page::Overview, aura_descriptor: Vec::new(), wireless_report: None, wireless_settings: None, live_topology: None, simulated_topology: None, service_endpoints: None, pipe_reference_report: None, confirm_backup_cleanup: false, confirm_preview_reset: false }
     }
 }
 impl eframe::App for App {
@@ -155,6 +158,14 @@ impl eframe::App for App {
                 Ok(Ok(NativeMessage::AuraInspected(report))) => {
                     self.aura_pnp_json = report;
                     self.status = "ASUS Aura PnP inspection completed (read-only)".into();
+                    self.native_rx = None;
+                }
+                Ok(Ok(NativeMessage::PipeReferences(report))) => {
+                    self.status = format!(
+                        "Offline EXE inspection: {} of {} pipe names referenced; does not establish an IPC API.",
+                        report.referenced_candidate_names, report.candidate_pipes
+                    );
+                    self.pipe_reference_report = Some(report);
                     self.native_rx = None;
                 }
                 Ok(Ok(NativeMessage::ServiceEndpoints(info))) => {
@@ -233,7 +244,7 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 ui.add_space(14.0);
                 ui.label(egui::RichText::new("LIANLITE").size(23.0).strong().color(cyan));
-                ui.label(egui::RichText::new("RUST NATIVE  /  v0.15").size(10.0).color(muted));
+                ui.label(egui::RichText::new("RUST NATIVE  /  v0.16").size(10.0).color(muted));
                 ui.add_space(35.0);
                 for (page, label) in [
                     (Page::Overview, "  Overview"),
@@ -274,7 +285,7 @@ impl eframe::App for App {
                         Page::Updates => "Application updates",
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new("v0.15.0").color(cyan).strong());
+                        ui.label(egui::RichText::new("v0.16.0").color(cyan).strong());
                     });
                 });
                 ui.label(egui::RichText::new(
@@ -468,6 +479,26 @@ impl eframe::App for App {
                                     ui.heading("Native device discovery");
                                     ui.add_space(8.0);
                                     ui.heading("L-Connect service interfaces (safe inspection)");
+                                    ui.label(egui::RichText::new(
+                                        "New: correlate pipe names with read-only string references in installed L-Connect EXE files. No pipes are opened."
+                                    ).color(muted));
+                                    if ui.add_enabled(self.native_rx.is_none(),
+                                        egui::Button::new("Check pipe references in L-Connect files")).clicked() {
+                                        let (tx,rx) = mpsc::channel();
+                                        self.native_rx = Some(rx);
+                                        self.pipe_reference_report = None;
+                                        std::thread::spawn(move || {
+                                            let _=tx.send(pipe_references::inspect().map(NativeMessage::PipeReferences));
+                                        });
+                                    }
+                                    if let Some(result) = &self.pipe_reference_report {
+                                        ui.label(format!("Pipe candidates: {} | Readable L-Connect EXEs: {}",
+                                            result.candidate_pipes, result.readable_executables));
+                                        ui.label(format!("EXE-referenced pipe names: {} | Families: {:?}",
+                                            result.referenced_candidate_names, result.matched_families));
+                                        ui.colored_label(egui::Color32::from_rgb(246,194,107),
+                                            "A static string reference does NOT prove pipe ownership or an available group-list API.");
+                                    }
                                     ui.label(egui::RichText::new(
                                         "Inspect only Windows process, localhost listener and named-pipe metadata; no connection, injection or service interruption."
                                     ).color(muted));
