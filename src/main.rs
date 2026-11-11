@@ -162,7 +162,7 @@ impl eframe::App for App {
         let cyan = egui::Color32::from_rgb(90, 213, 230);
         let muted = egui::Color32::from_rgb(147, 165, 186);
         let card = egui::Color32::from_rgb(24, 31, 46);
-        let border = egui::Stroke::new(1.0, egui::Color32::from_rgb(47, 59, 76));
+        let border = egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(47, 59, 76));
 
         egui::SidePanel::left("navigation")
             .resizable(false).exact_width(188.0)
@@ -229,7 +229,7 @@ impl eframe::App for App {
                                     (3, "PROFILES", "03", "local previews"),
                                 ] {
                                     egui::Frame::none().fill(card)
-                                        .rounding(egui::Rounding::same(12))
+                                        .rounding(egui::Rounding::same(12.0_f32))
                                         .stroke(border).inner_margin(14.0)
                                         .show(&mut columns[col], |ui| {
                                             ui.label(egui::RichText::new(title).size(10.0).color(muted));
@@ -239,7 +239,7 @@ impl eframe::App for App {
                                 }
                             });
                             ui.add_space(18.0);
-                            egui::Frame::none().fill(card).rounding(egui::Rounding::same(12))
+                            egui::Frame::none().fill(card).rounding(egui::Rounding::same(12.0_f32))
                                 .stroke(border).inner_margin(17.0).show(ui, |ui| {
                                     ui.heading("Quick profiles");
                                     ui.label(egui::RichText::new("Preview only: these controls do not change fan speed or RGB hardware.").color(muted));
@@ -276,7 +276,7 @@ impl eframe::App for App {
                             ui.add_space(16.0);
                             ui.heading("Fan zones");
                             for group in &mut self.config.groups {
-                                egui::Frame::none().fill(card).rounding(egui::Rounding::same(11))
+                                egui::Frame::none().fill(card).rounding(egui::Rounding::same(11.0_f32))
                                     .stroke(border).inner_margin(15.0).show(ui, |ui| {
                                         ui.horizontal(|ui| {
                                             ui.label(egui::RichText::new(&group.name).strong().size(15.0));
@@ -293,7 +293,7 @@ impl eframe::App for App {
                                     });
                                 ui.add_space(8.0);
                             }
-                            egui::Frame::none().fill(card).rounding(egui::Rounding::same(11))
+                            egui::Frame::none().fill(card).rounding(egui::Rounding::same(11.0_f32))
                                 .stroke(border).inner_margin(15.0).show(ui, |ui| {
                                     ui.heading("Strimer Wireless");
                                     for (index, brightness) in self.config.strimer_brightness.iter_mut().enumerate() {
@@ -308,7 +308,7 @@ impl eframe::App for App {
                                 });
                         }
                         Page::Devices => {
-                            egui::Frame::none().fill(card).rounding(egui::Rounding::same(12))
+                            egui::Frame::none().fill(card).rounding(egui::Rounding::same(12.0_f32))
                                 .stroke(border).inner_margin(17.0).show(ui, |ui| {
                                     ui.heading("Native device discovery");
                                     ui.label(egui::RichText::new("These buttons only inspect device IDs. No RGB control commands are sent.").color(muted));
@@ -331,7 +331,7 @@ impl eframe::App for App {
                                     ui.collapsing("GPU and RAM raw inventory", |ui| { ui.monospace(&self.native_windows_json); });
                                 });
                             ui.add_space(14.0);
-                            egui::Frame::none().fill(card).rounding(egui::Rounding::same(12))
+                            egui::Frame::none().fill(card).rounding(egui::Rounding::same(12.0_f32))
                                 .stroke(border).inner_margin(17.0).show(ui, |ui| {
                                     ui.heading("ASUS ROG Strix B650E-F");
                                     ui.label("AURA 0B05:19AF  |  MI_00 WinUSB candidate  |  MI_02 HID FF72:00A1");
@@ -354,7 +354,7 @@ impl eframe::App for App {
                                 });
                         }
                         Page::Diagnostics => {
-                            egui::Frame::none().fill(card).rounding(egui::Rounding::same(12))
+                            egui::Frame::none().fill(card).rounding(egui::Rounding::same(12.0_f32))
                                 .stroke(border).inner_margin(18.0).show(ui, |ui| {
                                     ui.heading("Export diagnostic reports");
                                     ui.label(egui::RichText::new("For the summary, scan Devices first. Raw PnP reports can include device identifiers.").color(muted));
@@ -399,7 +399,7 @@ impl eframe::App for App {
                                     ui.collapsing("Shareable summary preview", |ui| { ui.monospace(&self.last_summary); });
                                 });
                             ui.add_space(14.0);
-                            egui::Frame::none().fill(card).rounding(egui::Rounding::same(12))
+                            egui::Frame::none().fill(card).rounding(egui::Rounding::same(12.0_f32))
                                 .stroke(border).inner_margin(18.0).show(ui, |ui| {
                                     ui.heading("Lian Li process health");
                                     ui.horizontal_wrapped(|ui| {
@@ -417,7 +417,7 @@ impl eframe::App for App {
                                 });
                         }
                         Page::Updates => {
-                            egui::Frame::none().fill(card).rounding(egui::Rounding::same(12))
+                            egui::Frame::none().fill(card).rounding(egui::Rounding::same(12.0_f32))
                                 .stroke(border).inner_margin(18.0).show(ui, |ui| {
                                     ui.heading("GitHub Releases updater");
                                     ui.label(egui::RichText::new("quanghuy2203/LianLite").color(cyan));
@@ -446,7 +446,7 @@ impl eframe::App for App {
                                     ui.label(egui::RichText::new("The update replaces both application and updater. Old backups are kept for recovery.").color(muted));
                                 });
                             ui.add_space(14.0);
-                            egui::Frame::none().fill(card).rounding(egui::Rounding::same(12))
+                            egui::Frame::none().fill(card).rounding(egui::Rounding::same(12.0_f32))
                                 .stroke(border).inner_margin(18.0).show(ui, |ui| {
                                     ui.heading("Installation health");
                                     if ui.button("Check updater and backups").clicked() {
