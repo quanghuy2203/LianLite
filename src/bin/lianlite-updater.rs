@@ -24,6 +24,33 @@ fn main() {
         std::process::exit(1);
     }
 }
+// This executable is launched from a version-specific staging directory,
+// never from the installed directory. That permits replacing the installed
+// helper after successfully starting the updated main application.
+fn install_new_helper(target: &Path) -> Result<(), String> {
+    let running_helper = std::env::current_exe().map_err(|e| e.to_string())?;
+    let installed = target.with_file_name("lianlite-updater.exe");
+    let pending = target.with_file_name("lianlite-updater.exe.new");
+    let archive = (1..=64)
+        .map(|i| target.with_file_name(format!("lianlite-updater.exe.backup.{i}")))
+        .find(|path| !path.exists())
+        .ok_or("Too many old updater backups")?;
+    if pending.exists() { fs::remove_file(&pending).map_err(|e| e.to_string())?; }
+    fs::copy(&running_helper, &pending).map_err(|e| format!("Copy staged updater: {e}"))?;
+    let had_old = installed.exists();
+    if had_old {
+        if let Err(e) = fs::rename(&installed, &archive) {
+            let _ = fs::remove_file(&pending);
+            return Err(format!("Preserve installed updater: {e}"));
+        }
+    }
+    if let Err(e) = fs::rename(&pending, &installed) {
+        if had_old { let _ = fs::rename(&archive, &installed); }
+        return Err(format!("Install new updater: {e}"));
+    }
+    Ok(())
+}
+
 fn restore(backup: &Path, target: &Path) -> Result<(), String> {
     if target.exists() {
         fs::remove_file(target).map_err(|e| format!("Cannot remove failed new executable: {e}"))?;
@@ -94,7 +121,10 @@ fn run() -> Result<(), String> {
         Ok(None) => {
             let error_file = state_dir().join("updater-last-error.txt");
             let _ = fs::remove_file(error_file);
-            log("Update installed; new LianLite process is still running after 3 seconds. Backup retained.");
+            match install_new_helper(&target) {
+                Ok(()) => log("App and updater installed; app is running. Older backups retained."),
+                Err(e) => log(&format!("Main app updated and running; updater replacement needs attention: {e}")),
+            }
             Ok(())
         }
         Err(e) => {
