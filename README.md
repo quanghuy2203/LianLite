@@ -1,4 +1,4 @@
-# LianLite v0.15.0 — Windows L-Connect service interface research
+# LianLite v0.16.0 — Safe offline L-Connect IPC reference correlation
 
 LianLite is a native Rust GUI for **read-only diagnostics** and **local configuration previews**. No OpenRGB installation is required.
 
@@ -237,3 +237,16 @@ The UI explicitly shows **Live group API verified: no**; it will never populate 
 
 ### Still missing
 An authenticated/validated read-only L-Connect service protocol. v0.15 does not yet enumerate the three actual fan RF groups or two bound Strimer channels, nor does it provide live RGB, fan-speed or LCD control. This remains an explicit prerequisite for safe replacement of the official app.
+
+## v0.16 — inspect actual L-Connect files without opening named pipes
+
+The user's v0.15 scan revealed three running L-Connect processes (service, watchdog and GUI), three named-pipe *name candidates* and no L-Connect-owned loopback TCP listeners. The number of candidate names alone cannot establish which process owns them or whether they contain a read-only group-list API.
+
+This version adds **Devices → Check pipe references in L-Connect files**. The background read-only operation enumerates the same candidate names and exact L-Connect process executable paths locally, then searches the on-disk `.exe` bytes for each candidate's ASCII or UTF-16LE name. Exports **only counts and process-family labels**, never executable paths, individual pipe names, MACs or device serials. Limits: 12 processes, 64 candidate names, 32 MiB per executable, 64 KiB PowerShell JSON output. It does not load vendor DLLs, connect to pipes/sockets, open the wireless USB controller or send any message to L-Connect.
+
+A literal match is **weak static evidence** that a process binary refers to a possible pipe name, *not* proof of ownership or a supported API. Zero matches are inconclusive because code may be in a DLL, construct names at runtime or use unrelated endpoint names. This is not yet a functioning interface to live bound RF groups.
+
+Windows PR validation runs `cargo test --release --bins` and `cargo build --release --bins` on the feature branch before publishing. No fan, RGB, LCD or pump writes are enabled; L-Connect keeps exclusive hardware ownership.
+
+### Test
+Leave L-Connect and its services running, then choose **Devices → Check pipe references in L-Connect files**. Send just the counts shown and bottom STATUS, not any raw pipe names or executable files. A zero count is valid, and the current app will continue to report real live groups as unknown.
