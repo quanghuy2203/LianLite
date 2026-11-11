@@ -63,6 +63,58 @@ pub fn export_report(hid: &[NativeDevice], windows: &str) -> Result<PathBuf, Str
     fs::write(&target, bytes).map_err(|e| e.to_string())?;
     Ok(target)
 }
+
+pub fn inspect_aura_pnp() -> Result<String, String> {
+    // Windows PnP properties are read-only. Exact VID/PID allowlist prevents
+    // indiscriminate access to unrelated system devices.
+    // No HID handle is opened, and no I/O packets are sent to the controller.
+    ps(r#"
+$ErrorActionPreference = 'Stop'
+$devices = @(Get-PnpDevice -PresentOnly | Where-Object {
+  $_.InstanceId -match 'VID_0B05&PID_19AF'
+})
+$report = @(
+  foreach ($d in $devices) {
+    $props = @(Get-PnpDeviceProperty -InstanceId $d.InstanceId -ErrorAction SilentlyContinue |
+      Where-Object { $_.KeyName -in @(
+        'DEVPKEY_Device_DriverVersion',
+        'DEVPKEY_Device_DriverProvider',
+        'DEVPKEY_Device_BusReportedDeviceDesc',
+        'DEVPKEY_Device_HardwareIds',
+        'DEVPKEY_Device_CompatibleIds',
+        'DEVPKEY_Device_LocationInfo'
+      ) } |
+      ForEach-Object {
+        @{ Key = $_.KeyName; Value = @($_.Data | ForEach-Object { [string]$_ }) }
+      })
+    @{
+      Name = $d.FriendlyName
+      InstanceId = $d.InstanceId
+      Status = [string]$d.Status
+      Class = [string]$d.Class
+      Properties = $props
+    }
+  }
+)
+@{
+    DeviceCount = $report.Count
+    Devices = $report
+    HardwareProtocol = 'UNVERIFIED: no HID writes are enabled'
+} | ConvertTo-Json -Depth 7 -Compress
+"#)
+}
+
+pub fn export_aura_report(aura_json: &str) -> Result<PathBuf, String> {
+    let parsed: serde_json::Value = serde_json::from_str(aura_json).map_err(|e| e.to_string())?;
+    let base = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+    let dir = base.join("LianLite");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join("asus-aura-pnp-v07.json");
+    fs::write(&path, serde_json::to_vec_pretty(&parsed).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
