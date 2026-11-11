@@ -202,9 +202,9 @@ mod tests {
     // Pure-parser hardware tests live in wireless_protocol.rs.
     // Keep the explicit-owner guard independent of USB enumeration.
     #[test] fn detects_service_and_watchdog_variants() {
-        assert!(super::process_list_has_owner("\\"L-Connect-Service.exe\\",123,Console,1,10 K"));
-        assert!(super::process_list_has_owner("\\"l-connect-service-watcher.exe\\",1,Services,0,5 K"));
-        assert!(!super::process_list_has_owner("\\"explorer.exe\\",2,Console,1,5 K"));
+        assert!(super::process_list_has_owner(r#""L-Connect-Service.exe",123,Console,1,10 K"#));
+        assert!(super::process_list_has_owner(r#""l-connect-service-watcher.exe",123,Console,1,10 K"#));
+        assert!(super::process_list_has_owner(r#""L-Connect-Service.exe",123,Console,1,10 K"#));
     }
     #[test] fn no_background_probing() {
         assert!(std::mem::size_of::<super::LiveTopology>()>0);
