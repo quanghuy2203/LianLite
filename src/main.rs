@@ -7,6 +7,7 @@ mod diagnostics;
 mod aura_descriptor;
 mod discovery;
 mod wireless_research;
+mod snapshot;
 mod backups;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
@@ -69,7 +70,9 @@ fn read_lianli_processes() -> String {
     }
 }
 enum UpdateMessage { Checked(Option<update::Available>), Staged(update::Staged) }
-enum NativeMessage { Scanned(Vec<native::NativeDevice>), SystemScanned(String), AuraInspected(String), DescriptorInspected(Vec<aura_descriptor::DescriptorInfo>), WirelessDiscovered(discovery::DiscoveryReport), SettingsInspected(wireless_research::ResearchReport), SurveyDone(discovery::DiscoveryReport, wireless_research::ResearchReport) }
+enum NativeMessage { Scanned(Vec<native::NativeDevice>), SystemScanned(String), AuraInspected(String), DescriptorInspected(Vec<aura_descriptor::DescriptorInfo>), WirelessDiscovered(discovery::DiscoveryReport), SettingsInspected(wireless_research::ResearchReport), SurveyDone(discovery::DiscoveryReport, wireless_research::ResearchReport),
+    PcScanned { hid: Result<Vec<native::NativeDevice>, String>,
+        system: Result<String, String>, aura: Result<String, String> } }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Page { Overview, Devices, Diagnostics, Updates }
 struct App {
@@ -143,6 +146,23 @@ impl eframe::App for App {
                 Ok(Ok(NativeMessage::AuraInspected(report))) => {
                     self.aura_pnp_json = report;
                     self.status = "ASUS Aura PnP inspection completed (read-only)".into();
+                    self.native_rx = None;
+                }
+                Ok(Ok(NativeMessage::PcScanned { hid, system, aura })) => {
+                    let mut outcomes = Vec::new();
+                    match hid {
+                        Ok(found) => { outcomes.push(format!("HID: {} entries", found.len())); self.native_devices = found; }
+                        Err(e) => outcomes.push(format!("HID error: {e}")),
+                    }
+                    match system {
+                        Ok(data) => { outcomes.push("GPU/RAM: read".into()); self.native_windows_json = data; }
+                        Err(e) => outcomes.push(format!("GPU/RAM error: {e}")),
+                    }
+                    match aura {
+                        Ok(data) => { outcomes.push("ASUS PnP: read".into()); self.aura_pnp_json = data; }
+                        Err(e) => outcomes.push(format!("ASUS PnP error: {e}")),
+                    }
+                    self.status = outcomes.join(" | ");
                     self.native_rx = None;
                 }
                 Ok(Ok(NativeMessage::SurveyDone(discovered, schema))) => {
@@ -383,6 +403,15 @@ impl eframe::App for App {
                             egui::Frame::none().fill(card).rounding(egui::Rounding::same(12.0_f32))
                                 .stroke(border).inner_margin(17.0).show(ui, |ui| {
                                     ui.heading("Native device discovery");
+                                    if ui.add_enabled(self.native_rx.is_none(), egui::Button::new("Scan PC hardware in one click")).clicked() {
+                                        let (tx,rx) = mpsc::channel(); self.native_rx = Some(rx);
+                                        std::thread::spawn(move || {
+                                            let hid = native::scan_hid();
+                                            let system = native::scan_gpu_and_memory();
+                                            let aura = native::inspect_aura_pnp();
+                                            let _ = tx.send(Ok(NativeMessage::PcScanned { hid, system, aura }));
+                                        });
+                                    }
                                     ui.label(egui::RichText::new("Live wireless group discovery is unavailable while L-Connect owns the WinUSB TX/RX devices. No services are stopped.").color(muted));
                                     if ui.add_enabled(self.native_rx.is_none(), egui::Button::new("Refresh offline discovery")).clicked() {
                                         let (tx,rx)=mpsc::channel(); self.native_rx=Some(rx);
@@ -443,6 +472,25 @@ impl eframe::App for App {
                             egui::Frame::none().fill(card).rounding(egui::Rounding::same(12.0_f32))
                                 .stroke(border).inner_margin(18.0).show(ui, |ui| {
                                     ui.heading("Export diagnostic reports");
+                                    if ui.button("Export combined support snapshot (recommended)").clicked() {
+                                        self.status = match health::inspect() {
+                                            Ok(h) => {
+                                                let report = snapshot::compose(
+                                                    &self.native_devices, &self.native_windows_json, &self.aura_pnp_json,
+                                                    &h, self.wireless_report.as_ref(), self.wireless_settings.as_ref()
+                                                );
+                                                self.last_summary = serde_json::to_string_pretty(&report).unwrap_or_default();
+                                                match snapshot::export(&report) {
+                                                    Ok(path) => format!("Combined support snapshot saved: {}", path.display()),
+                                                    Err(e) => format!("Snapshot export error: {e}"),
+                                                }
+                                            }
+                                            Err(e) => format!("Unable to inspect installation: {e}"),
+                                        };
+                                    }
+                                    ui.label(egui::RichText::new(
+                                        "One support file with hardware flags and saved wireless structure. Scan PC hardware first to fill GPU/RAM/ASUS fields."
+                                    ).color(muted));
                                     ui.add_space(7.0);
                                     ui.heading("L-Connect saved-settings structure (offline)");
                                     ui.label(egui::RichText::new("Includes nested JSON key shapes and saved array lengths. Never represents live RF fan counts.").color(muted));
