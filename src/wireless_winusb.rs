@@ -44,14 +44,16 @@ mod platform {
     type Handle = *mut c_void;
     type Bool = i32;
     const DIGCF_PRESENT:u32 = 2;
-    const DIGCF_ALLCLASSES:u32 = 4;
+
     const DIGCF_DEVICEINTERFACE:u32 = 16;
     const GENERIC_READ:u32 = 0x80000000;
     const GENERIC_WRITE:u32 = 0x40000000;
     const OPEN_EXISTING:u32 = 3;
     const FILE_FLAG_OVERLAPPED:u32 = 0x40000000;
     const PIPE_TRANSFER_TIMEOUT:u32 = 3;
-    const MAX_INTERFACES:u32 = 4096;
+    const MAX_INTERFACES:u32 = 1024;
+    // GUID_DEVINTERFACE_USB_DEVICE: A5DCBF10-6530-11D2-901F-00C04FB951ED
+    const USB_GUID:Guid = Guid {a:0xA5DCBF10,b:0x6530,c:0x11D2,d:[0x90,0x1F,0,0xC0,0x4F,0xB9,0x51,0xED]};
     #[repr(C)] #[derive(Clone,Copy)]
     struct Guid {a:u32,b:u16,c:u16,d:[u8;8]}
     #[repr(C)]
@@ -99,8 +101,8 @@ mod platform {
 
     fn enumerate_rx() -> Result<Vec<Vec<u16>>, String> {
         let raw = unsafe {
-            SetupDiGetClassDevsW(ptr::null(),ptr::null(),ptr::null_mut(),
-                DIGCF_PRESENT | DIGCF_ALLCLASSES | DIGCF_DEVICEINTERFACE)
+            SetupDiGetClassDevsW(&USB_GUID,ptr::null(),ptr::null_mut(),
+                DIGCF_PRESENT | DIGCF_DEVICEINTERFACE)
         };
         if bad(raw) {return Err("Cannot enumerate device interfaces via Windows SetupAPI".into());}
         let _set=DeviceSet(raw);
@@ -110,7 +112,7 @@ mod platform {
                 cb_size:mem::size_of::<SpDeviceInterfaceData>() as u32,
                 guid:Guid{a:0,b:0,c:0,d:[0;8]},flags:0,reserved:0,
             };
-            let found=unsafe {SetupDiEnumDeviceInterfaces(raw,ptr::null(),ptr::null(),index,&mut data)};
+            let found=unsafe {SetupDiEnumDeviceInterfaces(raw,ptr::null(),&USB_GUID,index,&mut data)};
             if found==0 {break;}
             let mut needed=0u32;
             unsafe {
