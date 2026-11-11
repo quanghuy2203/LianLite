@@ -1,4 +1,4 @@
-# LianLite v0.14.0 — Safe wireless parser validation and Windows WinUSB fixes
+# LianLite v0.15.0 — Windows L-Connect service interface research
 
 LianLite is a native Rust GUI for **read-only diagnostics** and **local configuration previews**. No OpenRGB installation is required.
 
@@ -214,3 +214,26 @@ This release keeps the improved v0.12 USB LCD receiver inventory, fully offline 
 5. Leave L-Connect services running. A direct GetDev probe should still be refused by the safety guard.
 
 This validation demonstrates the decoder and UI pipeline only; it is not hardware verification.
+
+## v0.15.0 — Look for service-side discovery without disturbing cooling
+
+The machine has demonstrated that the L-Connect service/watchdog is running and the direct WinUSB GetDev probe correctly refuses to take the controller while it is in use. Instead of asking users to disable their cooling service, the new **Devices → L-Connect service interfaces → Find service communication interfaces** action passively inspects Windows process and endpoint metadata for potential service-owned IPC.
+
+The action uses a background PowerShell query to:
+- Look for exact L-Connect service/watchdog/GUI executable names in the Windows process table.
+- Correlate local TCP listening sockets (127.0.0.1 or ::1 only) to those process IDs, and show listener port numbers.
+- Count named pipes with names resembling Lian Li/L-Connect. Pipes are not opened or connected to; name match alone is not proof of ownership.
+- Redact process IDs, command lines, executable installation paths, and individual pipe names from the UI.
+
+This is read-only **metadata discovery, not a confirmed API**. If a socket or pipe exists, we still need to identify the message schema, verify it is safe, and determine whether device topology can be read without disturbing L-Connect. If none is found, this does not prove no IPC exists: it might use memory sharing, a private or differently named pipe, or a different API.
+
+The UI explicitly shows **Live group API verified: no**; it will never populate actual groups from guessed endpoints or the synthetic test fixture. No request to L-Connect, service shutdown, task disablement, process injection, USB reset, fan PWM, lighting or LCD writes are performed.
+
+### Validation
+1. Confirm Windows PR validation is green before merging into main and publishing.
+2. Update to v0.15.0 and leave L-Connect fully running.
+3. Open **Devices → Find service communication interfaces**. You should see a process count and the number of service-owned loopback listener ports and pipe-name candidates; zeros may be legitimate.
+4. If an error occurs, copy just the bottom STATUS text. Never disable cooling services merely to get a nonzero result.
+
+### Still missing
+An authenticated/validated read-only L-Connect service protocol. v0.15 does not yet enumerate the three actual fan RF groups or two bound Strimer channels, nor does it provide live RGB, fan-speed or LCD control. This remains an explicit prerequisite for safe replacement of the official app.
