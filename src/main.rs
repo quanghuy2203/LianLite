@@ -91,6 +91,7 @@ struct App {
     wireless_report: Option<discovery::DiscoveryReport>,
     wireless_settings: Option<wireless_research::ResearchReport>,
     confirm_backup_cleanup: bool,
+    confirm_preview_reset: bool,
 }
 impl Default for App {
     fn default() -> Self {
@@ -104,7 +105,7 @@ impl Default for App {
             update_rx: None, available: None, staged: None,
             native_rx: Some(rx), native_devices: vec![], native_windows_json: String::new(), aura_pnp_json: String::new(),
             global_color: [100,150,255], global_brightness: 70, last_summary: String::new(),
-            page: Page::Overview, aura_descriptor: Vec::new(), wireless_report: None, wireless_settings: None, confirm_backup_cleanup: false }
+            page: Page::Overview, aura_descriptor: Vec::new(), wireless_report: None, wireless_settings: None, confirm_backup_cleanup: false, confirm_preview_reset: false }
     }
 }
 impl eframe::App for App {
@@ -197,13 +198,6 @@ impl eframe::App for App {
                 Err(mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(150)),
             }
         }
-        let mut visuals = egui::Visuals::dark();
-        visuals.panel_fill = egui::Color32::from_rgb(13, 17, 28);
-        visuals.window_fill = egui::Color32::from_rgb(19, 24, 36);
-        visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(32, 40, 55);
-        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(41, 59, 78);
-        visuals.selection.bg_fill = egui::Color32::from_rgb(49, 123, 169);
-        ctx.set_visuals(visuals);
         let cyan = egui::Color32::from_rgb(90, 213, 230);
         let muted = egui::Color32::from_rgb(147, 165, 186);
         let card = egui::Color32::from_rgb(24, 31, 46);
@@ -366,6 +360,29 @@ impl eframe::App for App {
                             ui.label(egui::RichText::new("These are local user presets and are NOT a list of devices detected by L-Wireless.").color(muted));
                             if ui.button("Add manual preview zone").clicked() {
                                 self.config.groups.push(Group { name: format!("Preview zone {}", self.config.groups.len()+1), count: 1, speed_percent: 65, brightness: 70, rgb: self.global_color });
+                            }
+                            if !self.config.groups.is_empty() {
+                                if !self.confirm_preview_reset {
+                                    if ui.button("Clear manual preview zones...").clicked() {
+                                        self.confirm_preview_reset = true;
+                                    }
+                                } else {
+                                    ui.colored_label(egui::Color32::from_rgb(246, 194, 107),
+                                        "This clears only saved manual preview zones. It does not touch L-Connect or any hardware.");
+                                    ui.horizontal(|ui| {
+                                        if ui.button("Confirm clear preview zones").clicked() {
+                                            self.config.groups.clear();
+                                            self.confirm_preview_reset = false;
+                                            self.status = match save(&self.config) {
+                                                Ok(()) => "Cleared saved manual preview zones. Hardware unchanged.".into(),
+                                                Err(e) => format!("Zones cleared locally, but saving failed: {e}"),
+                                            };
+                                        }
+                                        if ui.button("Cancel").clicked() {
+                                            self.confirm_preview_reset = false;
+                                        }
+                                    });
+                                }
                             }
                             for group in &mut self.config.groups {
                                 egui::Frame::none().fill(card).rounding(egui::Rounding::same(11.0_f32))
@@ -690,5 +707,16 @@ impl eframe::App for App {
 }
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions { viewport: egui::ViewportBuilder::default().with_inner_size([1060.0, 740.0]), ..Default::default() };
-    eframe::run_native("LianLite", options, Box::new(|_| Ok(Box::new(App::default()))))
+    eframe::run_native("LianLite", options, Box::new(|cc| {
+        // Set the palette once. Re-applying Visuals every frame causes avoidable
+        // style mutations and repaints on a lightweight monitoring UI.
+        let mut visuals = egui::Visuals::dark();
+        visuals.panel_fill = egui::Color32::from_rgb(13, 17, 28);
+        visuals.window_fill = egui::Color32::from_rgb(19, 24, 36);
+        visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(32, 40, 55);
+        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(41, 59, 78);
+        visuals.selection.bg_fill = egui::Color32::from_rgb(49, 123, 169);
+        cc.egui_ctx.set_visuals(visuals);
+        Ok(Box::new(App::default()))
+    }))
 }
