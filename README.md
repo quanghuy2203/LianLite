@@ -1,4 +1,4 @@
-# LianLite v0.8.1 — Ultra Minimal Rust Native (Windows 11)
+# LianLite v0.9.0 — Native Rust dashboard for Windows 11
 
 LianLite is a native Rust GUI for **read-only diagnostics** and **local configuration previews**. No OpenRGB installation is required.
 
@@ -67,3 +67,30 @@ All updates are user-initiated; no background installer, USB writes or admin per
 Once v0.8.1 is installed, later releases can upgrade the installed helper as well as the GUI. Existing old backups remain preserved under numbered file names. Status logs (new helper) are in `%LOCALAPPDATA%\LianLite\updater-last-status.txt` and `updater-last-error.txt`. The app cannot guarantee long-term health based only on checking that the new process stays running for three seconds.
 
 **Note:** Do not describe this as an end-to-end tested updater until a real Windows 11 upgrade test completes successfully; GitHub Actions only verifies compilation/unit tests and package generation.
+
+## v0.9: redesigned dashboard & ASUS HID descriptor
+
+### UI redesign
+- Native egui GUI; dark navy design with cyan accents, sidebar navigation, device cards and a bottom status bar.
+- **Overview**: grouped counters for 5 TL Wireless LCD fans (3+2), 3 non-LCD fans, 2 Strimers, three local profile presets; preview-only RGB/speed/brightness sliders and Save local profile.
+- **Devices**: ASUS/Lian Li HID scan, GPU/RAM inventory, PnP inspection and the new ASUS HID descriptor inspection.
+- **Diagnostics**: export ASUS descriptor or ASUS PnP report, privacy-safe diagnostic summary, open report folder, process health.
+- **Updates**: version check, download and install via GitHub Releases; updater and backup diagnostics.
+- GUI uses `#![windows_subsystem = "windows"]` and does not open a console window when launched normally.
+
+### ASUS descriptor (read-only)
+The new **Read HID descriptor** button only opens the exact ASUS Aura interface with VID 0B05, PID 19AF, interface 2, usage page FF72 and usage 00A1. It calls HIDAPI's `get_report_descriptor()` and **never sends a HID feature/output report, WinUSB transfer or RGB command**. On Windows this may be a *reconstructed* descriptor rather than a raw physical USB descriptor. Opening the device may fail if another application holds an exclusive handle. A failure is reported and does not trigger any retry with write access.
+
+After clicking **Read HID descriptor** on the Devices tab, open Diagnostics and use **Export HID descriptor** to save `%APPDATA%\LianLite\aura-hid-descriptor-v09.json`. This contains descriptor data and device/product metadata, not device serial number. Verify the content before sharing.
+
+Controller `0B05:19AF` can behave differently from earlier `0B05:18F3` Aura USB products: successful descriptor retrieval **does not verify** the LED write protocol or zone mapping.
+
+Reference context:
+- https://docs.rs/hidapi/latest/hidapi/struct.HidDevice.html
+- https://gitlab.com/CalcProgrammer1/OpenRGB/-/issues/1390
+- https://gitlab.com/CalcProgrammer1/OpenRGB/-/issues/3929
+
+### Build and release
+Development takes place on a dedicated feature branch, so CI does not automatically publish each incremental change. Merge triggers one main-branch Windows Actions job. Build/test success and publication need explicit verification. **No fan, LCD, ASUS, ZOTAC or Lexar hardware write support is enabled.** Continue using L-Connect's background service.
+
+The in-app updater uses the verified portable ZIP pair from v0.8.1; it needs testing on the user's Windows 11 machine for recovery across multiple upgrades.
