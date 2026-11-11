@@ -1,4 +1,4 @@
-# LianLite v0.6 — Rust Native (Windows 11)
+# LianLite v0.7 — Rust Native (Windows 11)
 
 Lightweight GUI in Rust/egui. **No OpenRGB dependency.**
 
@@ -11,7 +11,7 @@ Lightweight GUI in Rust/egui. **No OpenRGB dependency.**
 - ZOTAC RTX 4070 Ti Trinity OC (SPECTRA 2.0)
 - Lexar ARES V2 DDR5-6000 CL28
 
-## v0.6 native hardware inventory
+## Native hardware inventory (v0.6 + v0.7)
 
 - Enumerate USB HID for **exact** ASUS Aura `VID_0B05 PID_19AF` and LIANLI `VID_1A86 PID_2107`.
 - Deduplicate identical HID descriptions; read product/interface/usage metadata.
@@ -60,3 +60,17 @@ GitHub Actions builds automatically for pushes to `main`. If the build succeeds,
 ## Updater
 
 The two-executable GitHub Releases updater remains from v0.4, including backup and checksum validation. It has not been fully tested for Windows recovery; keep a manually working copy until verified. No release tag is automatically published on pushes to `main`.
+
+## v0.7: ASUS Aura diagnostics and no CMD window
+
+- Both `src/main.rs` and `src/bin/lianlite-updater.rs` start with `#![windows_subsystem = "windows"]` to prevent a console window when double-clicking an executable.
+- The updater now writes failure details to `%LOCALAPPDATA%\LianLite\updater-last-error.txt` since the console is hidden.
+- New **Inspect ASUS Aura (read-only)** button retrieves Windows Plug and Play information for exact `VID_0B05&PID_19AF` using Windows built-in PowerShell `Get-PnpDevice` / `Get-PnpDeviceProperty`; this is not a HID report descriptor and does not prove the Aura command protocol.
+- **Export ASUS report** saves `%APPDATA%\LianLite\asus-aura-pnp-v07.json`. It may contain Windows device InstanceIds or location information; review/redact before sharing.
+- This version does **not** send RGB colors to the ASUS controller, GPU, RAM or Lian Li devices. It does not change fan speeds or LCD contents.
+
+No OpenRGB required. The existing GitHub Releases updater still requires **both** `lianlite.exe` and `lianlite-updater.exe` alongside each other. For first-time setup, use the `LianLite-Portable-Windows-x64.zip` artifact containing both executables. A GitHub Actions artifact is not itself a published update; use the explicit Publish GitHub Release workflow option after the build succeeds.
+
+### Windows validation
+
+Before publishing v0.7: verify the GitHub Actions build and tests are green; on Windows 11 launch the GUI directly and confirm no CMD opens; check that "Inspect ASUS Aura (read-only)" returns data or a meaningful error; review any exported identifiers before sharing; confirm the updater and restore path using a disposable copy of the application.
