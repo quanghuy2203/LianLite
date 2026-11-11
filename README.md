@@ -1,4 +1,4 @@
-# LianLite v0.9.0 — Native Rust dashboard for Windows 11
+# LianLite v0.10.0 — Evidence-based Wireless device inventory
 
 LianLite is a native Rust GUI for **read-only diagnostics** and **local configuration previews**. No OpenRGB installation is required.
 
@@ -94,3 +94,26 @@ Reference context:
 Development takes place on a dedicated feature branch, so CI does not automatically publish each incremental change. Merge triggers one main-branch Windows Actions job. Build/test success and publication need explicit verification. **No fan, LCD, ASUS, ZOTAC or Lexar hardware write support is enabled.** Continue using L-Connect's background service.
 
 The in-app updater uses the verified portable ZIP pair from v0.8.1; it needs testing on the user's Windows 11 machine for recovery across multiple upgrades.
+
+## v0.10: Stop fabricating the number of wireless fans
+
+The previous dashboard permanently displayed **5 LCD fans / 3 TL fans / 2 Strimers**, derived from an example configuration, not from the PC. This was misleading. v0.10 removes those fixed hardware counts and no longer creates fan groups from example data in a fresh profile.
+
+On startup, LianLite now runs a **read-only** background discovery pass:
+
+1. Query Windows PnP for known L-Wireless TX/RX adapter VID:PID pairs (V1 0416:8040/8041, V2 1A86:E304/E305). Deduplicate multiple Windows interface nodes to one *adapter type*. The SLV3H HID 1A86:2107 is NOT identified as a wireless TX/RX dongle.
+2. Inspect `%PROGRAMDATA%\Lian-Li\L-Connect 3\device` **read-only**, with bounded recursion/file size/decompressed output, for gzip/JSON records structured as `{DeviceID, Type, Data}`. Collect explicit `FanQuantity` settings only; never infer number of fans from USB enumeration. These settings can be wired, stale, or otherwise unrelated to the wireless binding list, and are **not live wireless groups**. Raw DeviceID values are intentionally omitted from the exported report.
+3. The dashboard labels these separately as **wireless adapter types**, **saved fan group settings**, **saved quantity**, and **live RF groups: unknown**. Buttons refresh the inventory without restarting the app.
+4. The `Diagnostics` tab can export `%APPDATA%\LianLite\wireless-discovery-v010.json`, a sanitized device inventory with no raw controller IDs. The existing manually saved preview zones remain usable but are clearly labeled as previews, not detected hardware.
+
+### Why this cannot yet show the precise 2 / 3 / 3 live groups
+
+A screenshot of L-Connect shows five bound *wireless channels*: two Strimer and three fan groups. The number of individual fans (2/3/3) is separate from the number of channels. L-Connect's wireless receiver protocol exposes this data through radio discovery, but **USB PnP alone cannot tell us the number of fans per bound channel**.
+
+LianLite currently does **not** send the RF `GetDev` discovery request because L-Connect services may be actively using the controller and the implementation is not verified on this exact Windows device. We will need an explicitly validated **read-only radio discovery path** or an officially supported read-only L-Connect service interface before presenting an exact live group map. Running two device owners concurrently could affect cooling; do not stop L-Connect to test this experimental inventory.
+
+Documentation:
+- Lian Li Wireless manual: https://lian-li.com/l-connect3/l-connect3-manual-l-wireless-sync/
+- Independent technical notes: https://github.com/qdellp/wirelesscanvas-rgb/blob/main/TECHNICAL.md
+
+The control surface remains preview-only. No cooling control, LCD writes, RF requests, HID feature/output transfers or L-Connect service changes have been implemented.
