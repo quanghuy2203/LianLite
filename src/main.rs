@@ -135,12 +135,21 @@ impl eframe::App for App {
             }
         }
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("LianLite 0.7  ·  Ultra Minimal");
+            ui.heading("LianLite 0.7.1  ·  Ultra Minimal");
             ui.label("Windows 11 | Native RGB controller research · no OpenRGB required");
             ui.colored_label(egui::Color32::YELLOW, "Lian Li fan/LCD control remains disabled. Keep L-Connect services running.");
             ui.separator();
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.heading("Software updates · GitHub Releases");
+                let updater_status_path = std::env::var_os("LOCALAPPDATA")
+                    .map(PathBuf::from).unwrap_or_else(std::env::temp_dir)
+                    .join("LianLite").join("updater-last-status.txt");
+                if let Ok(last_status) = fs::read_to_string(&updater_status_path) {
+                    ui.collapsing("Last update diagnostics", |ui| {
+                        ui.monospace(last_status);
+                        ui.small(format!("Log: {}", updater_status_path.display()));
+                    });
+                }
                 ui.label("Release repository: quanghuy2203/LianLite");
                 ui.horizontal(|ui| {
                     if ui.add_enabled(self.update_rx.is_none(), egui::Button::new("Check for updates")).clicked() {
