@@ -47,10 +47,19 @@ pub struct ResearchReport {
 }
 
 fn safe_setting_type(name: &str) -> String {
-    if name.is_empty() || name.len() > 40 ||
-        !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        "[redacted]".into()
-    } else { name.into() }
+    // Category names are read from user-controlled local files. Even a short
+    // alphanumeric string might contain an ID, so only known literal enum
+    // names are allowed in shared reports.
+    const KNOWN: &[&str] = &[
+        "Case", "Fan", "GroupLCD", "SingleLCD", "Lighting",
+        "MergeLightingEffectSetting", "OpenRgbLighting",
+        "Pump", "Strimer", "FanQuantity", "MergeOrder",
+        "MotherboardARGBSync", "LightingPort", "Wireless",
+        "WirelessSetting", "StrimerWireless",
+    ];
+    KNOWN.iter().find(|item| item.eq_ignore_ascii_case(name))
+        .map(|item| (*item).to_string())
+        .unwrap_or_else(|| "[unknown-type]".into())
 }
 fn shape(value: &Value) -> &'static str {
     match value {
@@ -228,7 +237,9 @@ pub fn export(report: &ResearchReport) -> Result<PathBuf, String> {
 mod tests {
     use super::*;
     #[test] fn allowlist_never_exposes_untrusted_field_names() {
-        assert_eq!(safe_setting_type("ab:cd:ef:12"), "[redacted]");
+        assert_eq!(safe_setting_type("ab:cd:ef:12"), "[unknown-type]");
+        assert_eq!(safe_setting_type("PRIVATEDEVICE123"), "[unknown-type]");
+        assert_eq!(safe_setting_type("GroupLCD"), "GroupLCD");
         assert_eq!(safe_field_name("MySecretSerial"), "[other]");
         assert_eq!(safe_field_name("Fans"), "fans");
     }
