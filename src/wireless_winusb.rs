@@ -204,7 +204,7 @@ mod tests {
     #[test] fn detects_service_and_watchdog_variants() {
         assert!(super::process_list_has_owner(r#""L-Connect-Service.exe",123,Console,1,10 K"#));
         assert!(super::process_list_has_owner(r#""l-connect-service-watcher.exe",123,Console,1,10 K"#));
-        assert!(super::process_list_has_owner(r#""L-Connect-Service.exe",123,Console,1,10 K"#));
+        assert!(!super::process_list_has_owner(r#""explorer.exe",2,Console,1,5 K"#));
     }
     #[test] fn no_background_probing() {
         assert!(std::mem::size_of::<super::LiveTopology>()>0);
