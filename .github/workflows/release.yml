@@ -23,7 +23,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Native driver safety tests
         shell: pwsh
-        run: cargo test --bins
+        # Run tests against the same release dependency profile used for packaging,
+        # avoiding a separate full debug dependency compilation.
+        run: cargo test --release --bins
       - name: Build
         shell: pwsh
         run: cargo build --release --bins
