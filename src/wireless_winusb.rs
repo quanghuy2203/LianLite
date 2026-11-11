@@ -36,8 +36,8 @@ fn check_owner() -> Result<(), String> {
 // prove absence of every possible service owner; exclusive open is still needed.
 fn process_list_has_owner(csv: &str) -> bool {
     csv.lines().any(|line| {
-        let name = line.split(',').next().unwrap_or("").trim().trim_matches('"');
-        matches!(name,
+        let name = line.split(',').next().unwrap_or("").trim().trim_matches('"').to_ascii_lowercase();
+        matches!(name.as_str(),
             "l-connect-service.exe" | "l-connect-service-watcher.exe"
             | "lconnectservice.exe" | "l-connect 3.exe" | "l-connect 3"
             | "l-connect.exe" | "lconnect3.exe")
