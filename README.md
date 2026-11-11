@@ -1,49 +1,62 @@
-# LianLite v0.5 — Ultra Minimal (Windows 11)
+# LianLite v0.6 — Rust Native (Windows 11)
 
-Rust desktop app for the user's hardware layout:
-- TL Wireless LCD: group of 3 fans and group of 2 fans
-- TL Wireless non-LCD: group of 3 fans
-- 2 Strimer Wireless cables
+Lightweight GUI in Rust/egui. **No OpenRGB dependency.**
 
-**Hardware controls are NOT implemented.** Fan-speed, RGB, and Strimer controls in the UI are local previews only. The HID scanner performs read-only enumeration of USB VID `1A86`, PID `2107`, based on a user-supplied inventory. It does not prove that this is the L-Wireless Controller. Keep L-Connect services active so the fans and LCD remain managed.
+## Hardware layout
+
+- Lian Li TL Wireless LCD: group of 3 + group of 2
+- Lian Li TL Wireless non-LCD: group of 3
+- 2 Lian Li Strimer Wireless cables
+- ASUS ROG Strix B650E-F Gaming WiFi (Aura)
+- ZOTAC RTX 4070 Ti Trinity OC (SPECTRA 2.0)
+- Lexar ARES V2 DDR5-6000 CL28
+
+## v0.6 native hardware inventory
+
+- Enumerate USB HID for **exact** ASUS Aura `VID_0B05 PID_19AF` and LIANLI `VID_1A86 PID_2107`.
+- Deduplicate identical HID descriptions; read product/interface/usage metadata.
+- Windows CIM query for GPU model/PNP ID and RAM module manufacturer/part number/speed.
+- Export a combined JSON report to `%APPDATA%\LianLite\native-hardware-v06.json`.
+- Existing Lian Li HID detection and process check from v0.4 remain.
+- Profiles and RGB/speed sliders are **preview only**, not applied to hardware.
+
+**Safety boundary:** No direct HID writes, SMBus/PCI/I2C access, firmware updates, fan changes or LCD writes. Hardware detection does not establish that a compatible RGB protocol is available.
+
+### Why RGB writes are not enabled yet
+
+ASUS Aura `0B05:19AF` has documented HID ancestry, but protocol features vary by board/firmware. A generic 65-byte command cannot safely be assumed correct. Confirm the specific motherboard's HID report and zone mapping first.
+
+ZOTAC's SPECTRA 2.0 GPU control transport for the exact 4070 Ti Trinity OC is not validated; older Zotac I2C findings must not be applied blindly to this card.
+
+Lexar ARES V2 RGB controller and a safe Windows SMBus transport are not validated. Do not probe DIMM SMBus addresses by writing; that may interfere with memory SPD/controller behavior.
+
+The Lian Li SLV3H HID interface has not been proven to be the Wireless controller. Keep L-Connect services running for fan and LCD management.
 
 ## Build
 
-Install Rust (MSVC target) and Visual Studio C++ Build Tools. From the repository root:
+Install Rust MSVC toolchain and Visual Studio C++ Build Tools on Windows 11.
 
 ```powershell
 cargo build --release --bins
 ```
 
-The two outputs are `target\release\lianlite.exe` and `target\release\lianlite-updater.exe`.
+Outputs: `target\release\lianlite.exe` and `target\release\lianlite-updater.exe`.
 
-You can also download the GitHub Actions artifact after the workflow succeeds. Install both programs in a **writable** folder (e.g., `%LOCALAPPDATA%\LianLite`), not in Program Files, and launch `lianlite.exe` normally.
+GitHub Actions builds automatically for pushes to `main`. If the build succeeds, download the `LianLite-Windows` workflow artifact. This is **not** a GitHub Release; the built-in update checker only downloads versions published in GitHub Releases. Do not publish a version tag until the build and updater have been verified.
 
-## GitHub Actions
+## Hardware diagnostic steps
 
-The `Windows release` workflow compiles with a Windows runner, uploads an artifact and, for a tag matching `v*`, creates a GitHub Release with:
-- `lianlite-windows-x64.zip` (the main executable only)
-- `lianlite-windows-x64.zip.sha256`
-- `lianlite-updater.exe` (needed on initial install)
+1. Run v0.6 and click **Detect ASUS + Lian Li HID**.
+2. Click **Detect GPU + RAM**.
+3. Click **Export native report**.
+4. Open `%APPDATA%\LianLite\native-hardware-v06.json` and review device IDs before sharing. The report may include PnP IDs/part numbers.
 
-Workflow status: https://github.com/quanghuy2203/LianLite/actions
+## Protocol references
 
-Do not create a release tag until the build has passed and the code has been reviewed.
+- ASUS hardware: https://rog.asus.com/motherboards/rog-strix/rog-strix-b650e-f-gaming-wifi-model/spec/
+- ASUS Aura HID: https://openrgb-wiki.readthedocs.io/en/latest/asus/ASUS-Aura-USB/
+- ZOTAC card: https://www.zotac.com/product/graphics_card/zotac-gaming-geforce-rtx-4070-ti-trinity-oc
 
-## Auto Update
+## Updater
 
-The app checks `quanghuy2203/LianLite` through GitHub's `releases/latest` API. It compares the release tag to the `Cargo.toml` version; a higher version enables the Download button. It verifies a SHA-256 checksum, checks ZIP contents, stages the new executable, and launches the standalone updater on user confirmation. The updater waits for the GUI to close, moves the previous executable to a backup, replaces the executable, then starts it.
-
-**Limitations:** The release checksum protects against download corruption, not a compromised publishing account. The release should eventually use cryptographic signatures. This updater does not replace itself; distributing a new updater helper requires a separate installation method. Starting a new process does not guarantee the new process remains healthy. If an existing `lianlite.exe.backup` exists, the helper refuses to update, to avoid overwriting a potentially necessary recovery copy. Remove it manually only after verifying the current version works. No automatic service stopping or firmware/HID writes are performed.
-
-The app and updater have not been tested on a Windows machine by the assistant. The build must be verified in GitHub Actions before relying on the release.
-
-## v0.5 optional RGB synchronization (motherboard / GPU / RAM)
-
-Install [OpenRGB](https://openrgb.org/) separately and check its hardware support. Start OpenRGB and enable **SDK Server** at `127.0.0.1:6742`. Make `OpenRGB.exe` available in your PATH or place it next to `lianlite.exe`. In LianLite click **Detect OpenRGB LED devices**, select the specific devices you want to control, choose a color, then press **Apply static color to SELECTED devices**. Nothing is sent until you explicitly click the Apply button.
-
-OpenRGB must recognize each device: motherboard, GPU and RAM detection is not guaranteed. Avoid concurrent LED control by Armoury Crate/Aura Sync or other applications. Device indexes may change after a scan; always review the list. The adapter relies on OpenRGB's command-line client, not direct USB/SMBus access, and sends one explicitly chosen device at a time. It does not synchronize animated effects or Lian Li Wireless hardware yet.
-
-**New USB/PnP scan:** "Scan all Windows USB/PnP" exports `%APPDATA%\LianLite\usb-pnp-inventory.json`. This may contain hardware instance identifiers; review/redact any sensitive data before sharing. The earlier HID-only scanner remains available. Never disable the L-Connect services for testing.
-
-The initial v0.5 app must be installed using the GitHub Actions artifact. A proper version-tagged Release only exists once a release tag is published. Updating from v0.4 to v0.5 from inside the app requires a v0.5 GitHub Release and both binaries co-located.
+The two-executable GitHub Releases updater remains from v0.4, including backup and checksum validation. It has not been fully tested for Windows recovery; keep a manually working copy until verified. No release tag is automatically published on pushes to `main`.
