@@ -283,9 +283,9 @@ impl eframe::App for App {
                                     (0, "WIRELESS ADAPTER TYPES", dongles.to_string(), "Windows PnP"),
                                     (1, "LCD USB RECEIVERS", lcd_receivers, "Windows USB 1CBE:0006"),
                                     (2, "SAVED CONFIG TYPES", saved_categories.to_string(), "offline L-Connect"),
-                                    (3, "LIVE RF GROUPS",
+                                    (3, "RX REPORTED GROUPS",
                                         self.live_topology.as_ref().map_or("?".to_string(), |r| r.groups.len().to_string()),
-                                        if self.live_topology.is_some() {"GetDev RX snapshot"} else {"not queried"}),
+                                        if self.live_topology.is_some() {"GetDev; binding unverified"} else {"not queried"}),
                                 ] {
                                     egui::Frame::none().fill(card)
                                         .rounding(egui::Rounding::same(12.0_f32))
@@ -302,7 +302,8 @@ impl eframe::App for App {
                                 egui::Frame::none().fill(card)
                                     .rounding(egui::Rounding::same(12.0_f32))
                                     .stroke(border).inner_margin(14.0).show(ui, |ui| {
-                                        ui.heading("Wireless groups from V1 receiver");
+                                        ui.heading("Devices reported by V1 receiver");
+                                        ui.small("Master binding unverified; report may include foreign wireless devices.");
                                         for group in &topology.groups {
                                             ui.label(format!("RF {}  ·  {}  ·  {} fan(s)  ·  RPM {:?}",
                                                 group.channel, group.kind, group.fan_count, group.fan_rpm));
@@ -454,7 +455,7 @@ impl eframe::App for App {
                                 .stroke(border).inner_margin(17.0).show(ui, |ui| {
                                     ui.heading("Native device discovery");
                                     ui.add_space(8.0);
-                                    ui.heading("Live Wireless V1 discovery (experimental)");
+                                    ui.heading("Direct Wireless V1 receiver discovery (experimental)");
                                     ui.label(egui::RichText::new(
                                         "GetDev reads real receiver group records (fan count, family, RF channel, RPM). Requires exclusive access: will refuse while L-Connect service/watchdog is running. Never stops services or adjusts fan PWM."
                                     ).color(muted));
@@ -465,7 +466,7 @@ impl eframe::App for App {
                                         });
                                     }
                                     if let Some(topology) = &self.live_topology {
-                                        ui.label(format!("Receiver reports {} record(s). Valid wireless groups: {}",
+                                        ui.label(format!("Receiver reports {} record(s). Valid device records: {}",
                                             topology.total_receiver_records, topology.groups.len()));
                                         for group in &topology.groups {
                                             ui.label(format!("Channel {}: {} — {} fan(s) — RPM {:?}",
