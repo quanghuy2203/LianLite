@@ -46,7 +46,7 @@ fn identify_adapter(id: &str) -> Option<&'static str> {
     ].iter().find_map(|(key,name)| upper.contains(key).then_some(*name))
 }
 fn is_lcd_receiver_root(instance_id: &str) -> bool {
-    instance_id.to_ascii_uppercase().starts_with("USB\\\\VID_1CBE&PID_0006\\\\")
+    instance_id.to_ascii_uppercase().starts_with("USB\\VID_1CBE&PID_0006\\")
 }
 fn windows_dongles() -> Result<(Vec<DongleEvidence>, usize), String> {
     // A PnP inventory is NOT a discovery protocol and may return multiple interfaces.
@@ -179,9 +179,9 @@ mod tests {
         assert_eq!(identify_adapter("USB\\VID_1A86&PID_2107\\A"),None);
     }
     #[test] fn counts_only_usb_lcd_root_not_interface() {
-        assert!(is_lcd_receiver_root("USB\\\\VID_1CBE&PID_0006\\\\LCD001"));
-        assert!(!is_lcd_receiver_root("USB\\\\VID_1CBE&PID_0006&MI_00\\\\LCD001"));
-        assert!(!is_lcd_receiver_root("HID\\\\VID_1CBE&PID_0006\\\\LCD001"));
+        assert!(is_lcd_receiver_root("USB\\VID_1CBE&PID_0006\\LCD001"));
+        assert!(!is_lcd_receiver_root("USB\\VID_1CBE&PID_0006&MI_00\\LCD001"));
+        assert!(!is_lcd_receiver_root("HID\\VID_1CBE&PID_0006\\LCD001"));
     }
     #[test] fn saved_fan_count_is_bounded_and_typed() {
         assert_eq!(fan_count("FanQuantity", &serde_json::json!(3)),Some(3));
