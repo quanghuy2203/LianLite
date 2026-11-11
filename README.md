@@ -1,4 +1,4 @@
-# LianLite v0.11.1 — Bounded backup retention
+# LianLite v0.12.0 — evidence-based device discovery and one-click diagnostics
 
 LianLite is a native Rust GUI for **read-only diagnostics** and **local configuration previews**. No OpenRGB installation is required.
 
@@ -148,3 +148,32 @@ On the **Updates** page, **Clean old update backups...** displays an explicit co
 ### Wireless notes from v0.11 diagnostic reports
 
 The user's sanitized settings report contained 16 decoded records. They were classified as `Case` (1), `Fan` (2), `GroupLCD` (1), `Lighting` (1), `MergeLightingEffectSetting` (1), `OpenRgbLighting` (6), `Pump` (2), `SingleLCD` (1), and `Strimer` (1). All had JSON object values. These are saved categories, not live wireless channels or fan-group counts. No binding group topology has been verified. The existing safe offline schema export is retained.
+
+## v0.12 — Combined research + detection, without extra USB traffic
+
+### What was added
+- On startup, the **offline discovery survey** now runs both Windows USB PnP inspection and a bounded read of L-Connect's saved settings in one worker. **Refresh offline discovery** refreshes both sources.
+- For physical TL Wireless LCD modules, Windows PnP checks the root USB device instance for exact **VID 1CBE PID 0006** and counts unique root instances; USB subinterfaces are ignored. An LCD receiver count may be unavailable or incomplete depending on Windows/USB connectivity. **This count is not wireless group topology** (it cannot distinguish which LCD fans are paired as groups of 2 and 3).
+- The dashboard now reports evidence-based **wireless adapter types**, **LCD USB receivers**, **saved configuration categories**, and **live RF groups unknown** instead of hard-coded numbers.
+- A new deep offline schema inspector describes nested JSON object field **names**, value types, and stored-array lengths for known L-Connect setting categories. It scans at most 512 files, 5 levels of subfolders, 512 KiB per file and 1 MiB decoded JSON per file; object/array traversal is also capped. Unknown setting types and unknown field names are **redacted**. It exports no DeviceID, paths or raw values. Saved array lengths are *not* live fan counts.
+- **Devices → Scan PC hardware in one click** checks ASUS/Lian Li HID, GPU/RAM and ASUS PnP in a single background task. Partial results survive when one step fails.
+- **Diagnostics → Export combined support snapshot (recommended)** creates `%APPDATA%\LianLite\lianlite-support-snapshot-v012.json` combining redacted hardware and wireless data, omitting serial numbers, MACs, raw PnP paths and raw L-Connect values. You can also export `wireless-settings-schema-v012.json` with nested structural summaries and `wireless-discovery-v012.json`.
+- **Overview → Clear manual preview zones...** explicitly lets you remove the stale manually-saved zone placeholders after confirmation; it never touches actual fans or L-Connect.
+- Set the native egui dark palette once at app startup rather than reapplying it every frame.
+- GitHub Actions runs `cargo test --release --bins` before `cargo build --release --bins` so tests and packaging share compiled release-profile dependencies. This may reduce duplicate compiler work; actual CI timing still needs measurement.
+- Retains v0.11.1's updater archive cleanup, backup recovery, and GUI subsystem (no console window).
+
+### Known constraints
+L-Connect's official UI knows its live Wireless RF groups. USB PnP and saved configuration records **do not provide that mapping**. LianLite does not try the community-documented WinUSB GetDev exchange while L-Connect controls the USB receiver; it must not race the active cooling service. Thus v0.12 can identify the presence of V1/V2 USB TX/RX and count exposed LCD USB receiver roots but cannot yet prove the 3 fan RF groups or 2 Strimer groups. No hardware RGB/PWM/LCD commands are enabled.
+
+### Suggested validation
+1. Confirm GitHub Windows Actions tests, build and release have succeeded.
+2. Update to v0.12 through the app; check **Updates → Check updater and backups**.
+3. Open **Overview**, confirm that USB LCD receivers are measured (if available) rather than hard-coded.
+4. Choose **Devices → Scan PC hardware in one click**, then **Diagnostics → Export combined support snapshot (recommended)**.
+5. If studying saved grouping, use **Diagnostics → Export v0.12 nested schema (no IDs)** after the automatic scan.
+
+### Reference research
+- [LIAN LI TL Wireless LCD troubleshooting](https://lian-li.com/faq/sl-tl-wireless-lcd/) says Device Manager can confirm the LCD USB receiver devices, including 2+3 configurations.
+- [Hypercolor hardware notes](https://hyperb1iss.github.io/hypercolor/hardware/compatibility/) document TL Wireless LCD USB receivers at VID 1CBE PID 0006, typically one USB receiver per LCD fan.
+- [Community L-Wireless transport study](https://github.com/qdellp/wirelesscanvas-rgb/blob/main/TECHNICAL.md) describes GetDev but uses active WinUSB I/O; that is **not implemented** here.
