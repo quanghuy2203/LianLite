@@ -184,7 +184,7 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 ui.add_space(14.0);
                 ui.label(egui::RichText::new("LIANLITE").size(23.0).strong().color(cyan));
-                ui.label(egui::RichText::new("RUST NATIVE  /  v0.10").size(10.0).color(muted));
+                ui.label(egui::RichText::new("RUST NATIVE  /  v0.11").size(10.0).color(muted));
                 ui.add_space(35.0);
                 for (page, label) in [
                     (Page::Overview, "  Overview"),
@@ -225,7 +225,7 @@ impl eframe::App for App {
                         Page::Updates => "Application updates",
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new("v0.10.0").color(cyan).strong());
+                        ui.label(egui::RichText::new("v0.11.0").color(cyan).strong());
                     });
                 });
                 ui.label(egui::RichText::new(
