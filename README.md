@@ -1,4 +1,4 @@
-# LianLite v0.7 — Rust Native (Windows 11)
+# LianLite v0.7.1 — Rust Native (Windows 11)
 
 Lightweight GUI in Rust/egui. **No OpenRGB dependency.**
 
@@ -74,3 +74,11 @@ No OpenRGB required. The existing GitHub Releases updater still requires **both*
 ### Windows validation
 
 Before publishing v0.7: verify the GitHub Actions build and tests are green; on Windows 11 launch the GUI directly and confirm no CMD opens; check that "Inspect ASUS Aura (read-only)" returns data or a meaningful error; review any exported identifiers before sharing; confirm the updater and restore path using a disposable copy of the application.
+
+## v0.7.1 updater recovery
+
+If the app closes after **Install & restart** but does not relaunch, open `%LOCALAPPDATA%\LianLite\updater-last-status.txt` and (if present) `updater-last-error.txt`. The prior updater might not produce a log. Look for `lianlite.exe.backup` and `lianlite.exe.pending` next to your installed executable, but **do not delete either before diagnosing**. If `lianlite.exe` still exists, try opening it directly.
+
+The v0.7.1 helper preserves an earlier backup as `lianlite.exe.backup.previous` rather than silently failing because `lianlite.exe.backup` already exists. It checks that the newly launched program is still running after three seconds; if the new executable exits immediately, it attempts to restore and relaunch the old one. It retains backups for manual recovery. This does not catch later crashes and does not establish end-to-end recovery reliability. The helper cannot automatically update itself through the existing EXE-only update package, so a user who already has an older helper may need to manually replace `lianlite-updater.exe` once with the latest helper shipped in the GitHub Release or portable bundle.
+
+Do not test updates in a directory containing irreplaceable files. The app should live in a writable application folder and stay with its updater executable.
