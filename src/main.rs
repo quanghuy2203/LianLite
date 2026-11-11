@@ -66,7 +66,7 @@ fn read_lianli_processes() -> String {
     }
 }
 enum UpdateMessage { Checked(Option<update::Available>), Staged(PathBuf) }
-enum NativeMessage { Scanned(Vec<native::NativeDevice>), SystemScanned(String) }
+enum NativeMessage { Scanned(Vec<native::NativeDevice>), SystemScanned(String), AuraInspected(String) }
 struct App {
     config: Config, hid: Vec<HidEntry>, process_report: String, status: String,
     update_rx: Option<Receiver<Result<UpdateMessage, String>>>,
@@ -74,6 +74,7 @@ struct App {
     native_rx: Option<Receiver<Result<NativeMessage, String>>>,
     native_devices: Vec<native::NativeDevice>,
     native_windows_json: String,
+    aura_pnp_json: String,
 }
 impl Default for App {
     fn default() -> Self {
@@ -82,7 +83,7 @@ impl Default for App {
         Self { config, hid: Vec::new(), process_report: "Not checked yet".into(),
             status: "Read-only hardware mode. No USB commands will be sent.".into(),
             update_rx: None, available: None, staged: None,
-            native_rx: None, native_devices: vec![], native_windows_json: String::new() }
+            native_rx: None, native_devices: vec![], native_windows_json: String::new(), aura_pnp_json: String::new() }
     }
 }
 impl eframe::App for App {
@@ -121,6 +122,11 @@ impl eframe::App for App {
                     self.status = "Windows GPU/RAM inventory retrieved (read-only)".into();
                     self.native_rx = None;
                 }
+                Ok(Ok(NativeMessage::AuraInspected(report))) => {
+                    self.aura_pnp_json = report;
+                    self.status = "ASUS Aura PnP inspection completed (read-only)".into();
+                    self.native_rx = None;
+                }
                 Ok(Err(e)) => { self.status = format!("Native scan error: {e}"); self.native_rx = None; }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.status = "Native scan worker disconnected".into(); self.native_rx = None;
@@ -129,7 +135,7 @@ impl eframe::App for App {
             }
         }
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("LianLite 0.6  ·  Ultra Minimal");
+            ui.heading("LianLite 0.7  ·  Ultra Minimal");
             ui.label("Windows 11 | Native RGB controller research · no OpenRGB required");
             ui.colored_label(egui::Color32::YELLOW, "Lian Li fan/LCD control remains disabled. Keep L-Connect services running.");
             ui.separator();
@@ -206,6 +212,21 @@ impl eframe::App for App {
                     ui.label(format!("{}: {} ({}) IF={} UsagePage={:04X}",d.kind,d.name,d.id,d.interface,d.usage_page));
                     ui.small(d.driver);
                 }
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(self.native_rx.is_none(), egui::Button::new("Inspect ASUS Aura (read-only)")).clicked() {
+                        let (tx,rx)=mpsc::channel(); self.native_rx=Some(rx);
+                        std::thread::spawn(move || { let _=tx.send(native::inspect_aura_pnp().map(NativeMessage::AuraInspected)); });
+                    }
+                    if ui.add_enabled(!self.aura_pnp_json.is_empty(), egui::Button::new("Export ASUS report")).clicked() {
+                        self.status = match native::export_aura_report(&self.aura_pnp_json) {
+                            Ok(path) => format!("ASUS PnP report saved: {}. Review InstanceId before sharing.", path.display()),
+                            Err(e) => format!("ASUS export failed: {e}"),
+                        };
+                    }
+                });
+                ui.collapsing("ASUS Aura Windows PnP properties", |ui| {
+                    ui.monospace(&self.aura_pnp_json);
+                });
                 ui.collapsing("GPU/RAM inventory (read-only)", |ui| {
                     ui.monospace(&self.native_windows_json);
                 });
