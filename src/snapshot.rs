@@ -30,6 +30,8 @@ pub fn compose(
         "Hardware": hardware,
         "Wireless": {
             "AdapterTypes": adapters,
+            "LcdUsbReceiverCount": wireless.and_then(|r| r.lcd_usb_receivers),
+            "LcdUsbReceiverMeaning": "Distinct USB device roots 1CBE:0006; does not reveal RF binding or fan groups.",
             "SavedRecordCount": schema.map(|r| r.typed_records).unwrap_or(0),
             "SavedSettingTypes": schema.map(|r| &r.record_types),
             "SavedFieldStructure": schema.map(|r| &r.fields),
@@ -62,7 +64,7 @@ mod tests {
             last_update_error:None
         };
         let wireless = DiscoveryReport {
-            groups:vec![], dongles:vec![DongleEvidence {
+            groups:vec![], lcd_usb_receivers: Some(5), dongles:vec![DongleEvidence {
                 model:"PRIVATE_ADAPTER_MODEL".into(), detected:true
             }], saved_records_checked:0, warnings:vec![],
             live_rf_groups_verified:false
@@ -72,5 +74,6 @@ mod tests {
         assert!(!output.contains("PRIVATE_DEVICE_ID"));
         assert!(!output.contains("serial-token"));
         assert!(output.contains("LiveBoundGroupsVerified"));
+        assert!(output.contains("LcdUsbReceiverCount"));
     }
 }
