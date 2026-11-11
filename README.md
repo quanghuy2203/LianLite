@@ -1,4 +1,4 @@
-# LianLite v0.11.0 — Wireless discovery research
+# LianLite v0.11.1 — Bounded backup retention
 
 LianLite is a native Rust GUI for **read-only diagnostics** and **local configuration previews**. No OpenRGB installation is required.
 
@@ -129,3 +129,22 @@ This schema map helps identify which saved setting categories might describe bou
 The existing v0.10 Windows PnP device discovery, manual preview-only profiles, privacy-safe hardware diagnostics and app/updater auto-update remain. Real fan RGB, PWM, LCD and L-Wireless channel control remain disabled.
 
 References: https://github.com/qdellp/wirelesscanvas-rgb/blob/main/TECHNICAL.md and https://github.com/lewisgibson/FanControl.LianLi/blob/main/docs/lighting.md
+
+## v0.11.1: Keep the installation directory clean
+
+Previously, every update kept a new `lianlite.exe.backup.previous.N` and `lianlite-updater.exe.backup.N` forever. This is why a portable folder grows by ~8 MB with every release.
+
+Now after the new GUI has remained running through the updater's three-second immediate-exit check **and** the installed updater has been successfully replaced, LianLite automatically prunes only superseded backups. It preserves:
+
+- The previous GUI as `lianlite.exe.backup` for manual rollback.
+- The most recent previous updater as `lianlite-updater.exe.backup.N`.
+
+It removes older app `.backup.previous` / `.backup.previous.N` and older updater `.backup.N` archives, using a strict filename allowlist, never deleting the installed `.exe`, the current GUI backup, staged updates, logs or unknown filenames. Cleanup failures are recorded in updater status; they do not mark a successfully installed application as failed. During a failed update, existing backups are never pruned.
+
+On the **Updates** page, **Clean old update backups...** displays an explicit confirmation before cleaning older backup archives in the running app's install folder. This also handles older archives accumulated before v0.11.1. The operation cannot recover disk space in any other folder and does not erase the two most recent rollback copies.
+
+**Remaining limitation:** A process still running after three seconds can still fail later. Backups provide a manual recovery path but are not a guarantee of successful long-term operation. Do not remove the two retained rollback files before verifying the current release.
+
+### Wireless notes from v0.11 diagnostic reports
+
+The user's sanitized settings report contained 16 decoded records. They were classified as `Case` (1), `Fan` (2), `GroupLCD` (1), `Lighting` (1), `MergeLightingEffectSetting` (1), `OpenRgbLighting` (6), `Pump` (2), `SingleLCD` (1), and `Strimer` (1). All had JSON object values. These are saved categories, not live wireless channels or fan-group counts. No binding group topology has been verified. The existing safe offline schema export is retained.
