@@ -11,9 +11,16 @@ pub fn probe() -> Result<LiveTopology, String> {
 }
 
 fn check_owner() -> Result<(), String> {
-    let result = Command::new("tasklist")
-        .args(["/FO","CSV","/NH"])
-        .output().map_err(|e| format!("Cannot verify L-Connect service state: {e}"))?;
+    let mut process_list = Command::new("tasklist");
+    process_list.args(["/FO","CSV","/NH"]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // Windows GUI subsystem: prevent a tasklist console flash.
+        process_list.creation_flags(0x08000000);
+    }
+    let result = process_list.output()
+        .map_err(|e| format!("Cannot verify L-Connect service state: {e}"))?;
     if !result.status.success() {
         return Err("Cannot verify L-Connect service state; USB probe refused".into());
     }
@@ -168,7 +175,7 @@ mod platform {
         let mut transferred=0u32;
         if unsafe{WinUsb_WritePipe(handle,0x01,query.as_mut_ptr(),64,&mut transferred,ptr::null_mut())}==0
             || transferred!=64 {
-            return Err(format!("GetDev query failed or short-write ({} bytes). No control packet sent.",transferred));
+            return Err(format!("GetDev request failed or transferred only {} bytes. No PWM/RGB commands attempted.",transferred));
         }
         let mut response=[0u8;512];
         let mut got=0u32;
