@@ -7,6 +7,7 @@ mod diagnostics;
 mod aura_descriptor;
 mod discovery;
 mod wireless_research;
+mod backups;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf, process::Command, sync::mpsc::{self, Receiver}};
@@ -86,6 +87,7 @@ struct App {
     aura_descriptor: Vec<aura_descriptor::DescriptorInfo>,
     wireless_report: Option<discovery::DiscoveryReport>,
     wireless_settings: Option<wireless_research::ResearchReport>,
+    confirm_backup_cleanup: bool,
 }
 impl Default for App {
     fn default() -> Self {
@@ -99,7 +101,7 @@ impl Default for App {
             update_rx: None, available: None, staged: None,
             native_rx: Some(rx), native_devices: vec![], native_windows_json: String::new(), aura_pnp_json: String::new(),
             global_color: [100,150,255], global_brightness: 70, last_summary: String::new(),
-            page: Page::Overview, aura_descriptor: Vec::new(), wireless_report: None, wireless_settings: None }
+            page: Page::Overview, aura_descriptor: Vec::new(), wireless_report: None, wireless_settings: None, confirm_backup_cleanup: false }
     }
 }
 impl eframe::App for App {
@@ -184,7 +186,7 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 ui.add_space(14.0);
                 ui.label(egui::RichText::new("LIANLITE").size(23.0).strong().color(cyan));
-                ui.label(egui::RichText::new("RUST NATIVE  /  v0.11").size(10.0).color(muted));
+                ui.label(egui::RichText::new("RUST NATIVE  /  v0.11.1").size(10.0).color(muted));
                 ui.add_space(35.0);
                 for (page, label) in [
                     (Page::Overview, "  Overview"),
@@ -225,7 +227,7 @@ impl eframe::App for App {
                         Page::Updates => "Application updates",
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new("v0.11.0").color(cyan).strong());
+                        ui.label(egui::RichText::new("v0.11.1").color(cyan).strong());
                     });
                 });
                 ui.label(egui::RichText::new(
@@ -530,7 +532,7 @@ impl eframe::App for App {
                                         }
                                     });
                                     if self.update_rx.is_some() { ui.spinner(); }
-                                    ui.label(egui::RichText::new("The update replaces both application and updater. Old backups are kept for recovery.").color(muted));
+                                    ui.label(egui::RichText::new("Keeps the newest application rollback and updater rollback. Older numbered backups are cleaned after a successful update.").color(muted));
                                 });
                             ui.add_space(14.0);
                             egui::Frame::none().fill(card).rounding(egui::Rounding::same(12.0_f32))
@@ -542,6 +544,35 @@ impl eframe::App for App {
                                                 h.updater_present, h.backup_present, h.old_backup_present, h.pending_present),
                                             Err(e) => e,
                                         };
+                                    }
+                                    ui.add_space(8.0);
+                                    if !self.confirm_backup_cleanup {
+                                        if ui.button("Clean old update backups...").clicked() {
+                                            self.confirm_backup_cleanup = true;
+                                        }
+                                    } else {
+                                        ui.colored_label(egui::Color32::from_rgb(246, 194, 107),
+                                            "Keeps lianlite.exe.backup and the newest updater backup. Deletes only older numbered archives.");
+                                        ui.horizontal(|ui| {
+                                            if ui.button("Confirm cleanup").clicked() {
+                                                self.confirm_backup_cleanup = false;
+                                                self.status = match std::env::current_exe()
+                                                    .map_err(|e| e.to_string())
+                                                    .and_then(|exe| {
+                                                        let dir = exe.parent().ok_or("Missing install directory")?;
+                                                        backups::cleanup(dir)
+                                                    }) {
+                                                        Ok(result) => format!(
+                                                            "Backup cleanup: {} old files deleted, {} rollbacks retained. {}",
+                                                            result.deleted, result.retained,
+                                                            if result.failed.is_empty() { "No errors.".into() }
+                                                            else { result.failed.join(" | ") }
+                                                        ),
+                                                        Err(e) => format!("Backup cleanup error: {e}"),
+                                                    };
+                                            }
+                                            if ui.button("Cancel").clicked() { self.confirm_backup_cleanup = false; }
+                                        });
                                     }
                                     let path = std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
                                         .unwrap_or_else(std::env::temp_dir).join("LianLite");
