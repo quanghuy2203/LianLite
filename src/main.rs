@@ -1,5 +1,5 @@
 mod update;
-mod rgb_bridge;
+mod native;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf, process::Command, sync::mpsc::{self, Receiver}};
@@ -65,14 +65,14 @@ fn read_lianli_processes() -> String {
     }
 }
 enum UpdateMessage { Checked(Option<update::Available>), Staged(PathBuf) }
-enum RgbMessage { Listed(String, Vec<rgb_bridge::Device>), Applied(String), UsbScanned(String) }
+enum NativeMessage { Scanned(Vec<native::NativeDevice>), SystemScanned(String) }
 struct App {
     config: Config, hid: Vec<HidEntry>, process_report: String, status: String,
     update_rx: Option<Receiver<Result<UpdateMessage, String>>>,
     available: Option<update::Available>, staged: Option<PathBuf>,
-    rgb_rx: Option<Receiver<Result<RgbMessage, String>>>, rgb_devices: Vec<rgb_bridge::Device>,
-    rgb_selected: Vec<usize>, rgb_color: [u8; 3], rgb_report: String,
-    usb_report: String,
+    native_rx: Option<Receiver<Result<NativeMessage, String>>>,
+    native_devices: Vec<native::NativeDevice>,
+    native_windows_json: String,
 }
 impl Default for App {
     fn default() -> Self {
@@ -81,8 +81,7 @@ impl Default for App {
         Self { config, hid: Vec::new(), process_report: "Not checked yet".into(),
             status: "Read-only hardware mode. No USB commands will be sent.".into(),
             update_rx: None, available: None, staged: None,
-            rgb_rx: None, rgb_devices: vec![], rgb_selected: vec![], rgb_color: [80, 140, 255],
-            rgb_report: "OpenRGB not scanned".into(), usb_report: "USB PnP not scanned".into() }
+            native_rx: None, native_devices: vec![], native_windows_json: String::new() }
     }
 }
 impl eframe::App for App {
@@ -110,35 +109,27 @@ impl eframe::App for App {
                 }
             }
         }
-        if let Some(rx) = &self.rgb_rx {
+        if let Some(rx) = &self.native_rx {
             match rx.try_recv() {
-                Ok(Ok(RgbMessage::Listed(report, items))) => {
-                    self.rgb_report = report;
-                    self.rgb_devices = items;
-                    self.rgb_selected.clear();
-                    self.rgb_rx = None;
+                Ok(Ok(NativeMessage::Scanned(devices))) => {
+                    self.status = format!("Native: {} supported HID entries found (read-only)", devices.len());
+                    self.native_devices = devices; self.native_rx = None;
                 }
-                Ok(Ok(RgbMessage::Applied(message))) => { self.status = message; self.rgb_rx = None; }
-                Ok(Ok(RgbMessage::UsbScanned(report))) => {
-                    let path = config_path().with_file_name("usb-pnp-inventory.json");
-                    self.status = match fs::create_dir_all(path.parent().unwrap())
-                        .and_then(|_| fs::write(&path, report.as_bytes())) {
-                        Ok(()) => format!("USB PnP data saved: {}", path.display()),
-                        Err(e) => format!("USB PnP export failed: {e}"),
-                    };
-                    self.usb_report = report;
-                    self.rgb_rx = None;
+                Ok(Ok(NativeMessage::SystemScanned(report))) => {
+                    self.native_windows_json = report;
+                    self.status = "Windows GPU/RAM inventory retrieved (read-only)".into();
+                    self.native_rx = None;
                 }
-                Ok(Err(e)) => { self.status = format!("Diagnostics / OpenRGB error: {e}"); self.rgb_rx = None; }
+                Ok(Err(e)) => { self.status = format!("Native scan error: {e}"); self.native_rx = None; }
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.status = "Hardware diagnostics worker stopped".into(); self.rgb_rx = None;
+                    self.status = "Native scan worker disconnected".into(); self.native_rx = None;
                 }
                 Err(mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(150)),
             }
         }
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("LianLite 0.5  ·  Ultra Minimal");
-            ui.label("Windows 11  |  Lian Li diagnostics + optional OpenRGB LED integration");
+            ui.heading("LianLite 0.6  ·  Ultra Minimal");
+            ui.label("Windows 11 | Native RGB controller research · no OpenRGB required");
             ui.colored_label(egui::Color32::YELLOW, "Lian Li fan/LCD control remains disabled. Keep L-Connect services running.");
             ui.separator();
             egui::ScrollArea::vertical().show(ui, |ui| {
@@ -184,45 +175,39 @@ impl eframe::App for App {
                     self.status = match save(&self.config) { Ok(()) => format!("Saved to {}", config_path().display()), Err(e) => e };
                 }
                 ui.separator();
-                ui.heading("Mainboard / GPU / RAM lighting · OpenRGB");
-                ui.label("Optional: OpenRGB must be installed, running with SDK Server 127.0.0.1:6742.");
-                ui.label("OpenRGB may not support every device. Avoid simultaneous RGB control from Armoury Crate.");
-                if ui.add_enabled(self.rgb_rx.is_none(), egui::Button::new("Detect OpenRGB LED devices")).clicked() {
-                    let (tx, rx) = mpsc::channel(); self.rgb_rx = Some(rx);
-                    std::thread::spawn(move || { let _ = tx.send(rgb_bridge::list().map(|(raw, devices)| RgbMessage::Listed(raw, devices))); });
-                }
-                if self.rgb_rx.is_some() { ui.spinner(); }
-                for device in &self.rgb_devices {
-                    let mut enabled = self.rgb_selected.contains(&device.index);
-                    if ui.checkbox(&mut enabled, format!("Device {} · {}", device.index, device.name)).changed() {
-                        if enabled { self.rgb_selected.push(device.index); }
-                        else { self.rgb_selected.retain(|x| *x != device.index); }
+                ui.heading("Native hardware detection");
+                ui.label("ASUS ROG Strix B650E-F · HID candidate 0B05:19AF");
+                ui.label("ZOTAC RTX 4070 Ti Trinity OC · SPECTRA protocol not yet confirmed");
+                ui.label("Lexar ARES V2 DDR5 · RGB chip and SMBus access not yet verified");
+                ui.colored_label(egui::Color32::YELLOW, "All native drivers are read-only. No RGB, SMBus, GPU or fan writes.");
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(self.native_rx.is_none(), egui::Button::new("Detect ASUS + Lian Li HID")).clicked() {
+                        let (tx,rx)=mpsc::channel(); self.native_rx=Some(rx);
+                        std::thread::spawn(move || { let _=tx.send(native::scan_hid().map(NativeMessage::Scanned)); });
                     }
-                }
-                let mut color = egui::Color32::from_rgb(self.rgb_color[0], self.rgb_color[1], self.rgb_color[2]);
-                if ui.color_edit_button_srgba(&mut color).changed() {
-                    self.rgb_color = [color.r(), color.g(), color.b()];
-                }
-                let can_apply = !self.rgb_selected.is_empty() && self.rgb_rx.is_none();
-                if ui.add_enabled(can_apply, egui::Button::new("Apply static color to SELECTED devices")).clicked() {
-                    let selected = self.rgb_selected.clone();
-                    let color = self.rgb_color;
-                    let (tx, rx) = mpsc::channel(); self.rgb_rx = Some(rx);
-                    std::thread::spawn(move || {
-                        let mut results = Vec::new();
-                        for device in selected {
-                            match rgb_bridge::apply_color(device, color) {
-                                Ok(_) => results.push(format!("Device {device}: command submitted")),
-                                Err(e) => {
-                                    let _ = tx.send(Err(format!("Device {device}: {e}. Earlier selected devices may already have changed.")));
-                                    return;
-                                }
+                    if ui.add_enabled(self.native_rx.is_none(), egui::Button::new("Detect GPU + RAM")).clicked() {
+                        let (tx,rx)=mpsc::channel(); self.native_rx=Some(rx);
+                        std::thread::spawn(move || { let _=tx.send(native::scan_gpu_and_memory().map(NativeMessage::SystemScanned)); });
+                    }
+                    if ui.button("Export native report").clicked() {
+                        self.status = if self.native_windows_json.is_empty() {
+                            "Use Detect GPU + RAM before exporting native report".into()
+                        } else {
+                            match native::export_report(&self.native_devices, &self.native_windows_json) {
+                                Ok(path) => format!("Saved {}. Review IDs before sharing.",path.display()),
+                                Err(e) => format!("Export failed: {e}"),
                             }
-                        }
-                        let _ = tx.send(Ok(RgbMessage::Applied(results.join("; "))));
-                    });
+                        };
+                    }
+                });
+                if self.native_rx.is_some() { ui.spinner(); }
+                for d in &self.native_devices {
+                    ui.label(format!("{}: {} ({}) IF={} UsagePage={:04X}",d.kind,d.name,d.id,d.interface,d.usage_page));
+                    ui.small(d.driver);
                 }
-                ui.collapsing("Raw OpenRGB scan", |ui| { ui.monospace(&self.rgb_report); });
+                ui.collapsing("GPU/RAM inventory (read-only)", |ui| {
+                    ui.monospace(&self.native_windows_json);
+                });
                 ui.separator();
                 ui.heading("Hardware diagnostics");
                 ui.horizontal(|ui| {
@@ -239,15 +224,12 @@ impl eframe::App for App {
                         self.status = match result { Ok(()) => format!("Exported {}", path.display()), Err(e) => e.to_string() };
                     }
                     if ui.button("Check Lian Li processes").clicked() { self.process_report = read_lianli_processes(); }
-                    if ui.add_enabled(self.rgb_rx.is_none(), egui::Button::new("Scan all Windows USB/PnP")).clicked() {
-                        let (tx, rx) = mpsc::channel(); self.rgb_rx = Some(rx);
-                        std::thread::spawn(move || { let _ = tx.send(rgb_bridge::scan_windows_usb().map(RgbMessage::UsbScanned)); });
-                    }
+
                 });
                 for entry in &self.hid {
                     ui.label(format!("{} {} · VID:{} PID:{} · interface {} · usage page {:04X}", entry.manufacturer, entry.product, entry.vid, entry.pid, entry.interface, entry.usage_page));
                 }
-                ui.label("Windows USB/PnP export is read-only. Includes device IDs; review JSON before sharing.");
+                ui.label("Native report is read-only. Review device identifiers before sharing.");
                 ui.label("Matching process names (read-only):");
                 ui.monospace(&self.process_report);
                 ui.separator(); ui.label(&self.status);
