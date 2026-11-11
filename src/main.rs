@@ -261,13 +261,16 @@ impl eframe::App for App {
                     match self.page {
                         Page::Overview => {
                             let dongles = self.wireless_report.as_ref().map_or(0, |r| r.dongles.len());
-                            let saved_groups = self.wireless_report.as_ref().map_or(0, |r| r.groups.len());
-                            let saved_fans = self.wireless_report.as_ref().map_or(0, |r| r.identified_fans());
+                            let lcd_receivers = self.wireless_report.as_ref()
+                                .and_then(|r| r.lcd_usb_receivers)
+                                .map_or("?".into(), |n| n.to_string());
+                            let saved_categories = self.wireless_settings.as_ref()
+                                .map_or(0, |r| r.record_types.len());
                             ui.columns(4, |columns| {
                                 for (col, title, value, info) in [
                                     (0, "WIRELESS ADAPTER TYPES", dongles.to_string(), "Windows PnP"),
-                                    (1, "SAVED GROUP RECORDS", saved_groups.to_string(), "historical config"),
-                                    (2, "SAVED FAN QUANTITY", saved_fans.to_string(), "not a live count"),
+                                    (1, "LCD USB RECEIVERS", lcd_receivers, "Windows USB 1CBE:0006"),
+                                    (2, "SAVED CONFIG TYPES", saved_categories.to_string(), "offline L-Connect"),
                                     (3, "LIVE RF GROUPS", "?".to_string(), "not yet queried"),
                                 ] {
                                     egui::Frame::none().fill(card)
@@ -292,6 +295,10 @@ impl eframe::App for App {
                                     if self.native_rx.is_some() { ui.spinner(); }
                                     if let Some(report) = &self.wireless_report {
                                         for adapter in &report.dongles { ui.label(format!("Adapter detected: {}",adapter.model)); }
+                                        ui.label(match report.lcd_usb_receivers {
+                                            Some(n) => format!("Actual LCD USB receiver roots detected: {n} (not RF groups)"),
+                                            None => "LCD USB receiver inventory unavailable".into(),
+                                        });
                                         for group in &report.groups {
                                             ui.label(format!("Saved setting: {}  |  {} fan(s)  |  not live",
                                                 group.name, group.fan_count.unwrap_or(0)));
