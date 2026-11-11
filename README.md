@@ -1,4 +1,4 @@
-# LianLite v0.12.0 — evidence-based device discovery and one-click diagnostics
+# LianLite v0.13.0 — Experimental native L-Wireless V1 GetDev discovery
 
 LianLite is a native Rust GUI for **read-only diagnostics** and **local configuration previews**. No OpenRGB installation is required.
 
@@ -177,3 +177,21 @@ L-Connect's official UI knows its live Wireless RF groups. USB PnP and saved con
 - [LIAN LI TL Wireless LCD troubleshooting](https://lian-li.com/faq/sl-tl-wireless-lcd/) says Device Manager can confirm the LCD USB receiver devices, including 2+3 configurations.
 - [Hypercolor hardware notes](https://hyperb1iss.github.io/hypercolor/hardware/compatibility/) document TL Wireless LCD USB receivers at VID 1CBE PID 0006, typically one USB receiver per LCD fan.
 - [Community L-Wireless transport study](https://github.com/qdellp/wirelesscanvas-rgb/blob/main/TECHNICAL.md) describes GetDev but uses active WinUSB I/O; that is **not implemented** here.
+
+## v0.13.0: Native receiver-side RF topology reader (experimental)
+
+This release implements an actual **V1 0416:8041 RX GetDev** reader, not another offline settings report. The new Rust module `wireless_protocol.rs` parses the receiver's `0x10` response with 42-byte device records. It validates page length and 0x1C record markers, excludes master records and implausible fan quantities, and classifies Lian Li fan families (TL, SL and SL Infinity) as well as Strimer types from the documented device/fan-type bytes. For fan devices it reports a 0–4 fan count, per-fan RPM, and RF channel. It never exports the device/master MAC addresses. Unit tests cover mixed 2/3-fan group records, Strimer, malformed payloads, duplicate devices and unverified binding.
+
+The V1 Windows backend `wireless_winusb.rs` uses Windows SetupAPI / native WinUSB and sends exactly **one GetDev query to endpoint 0x01**, reading the RX response on 0x81 with a bounded timeout. This is a single USB *discovery request*, not a fan speed, lighting, LCD, or firmware command. No driver installation, firmware reset, USB reset, L-Connect service changes or automatic polling. It only tries the **exact 0416:8041 V1 receiver**, requires a single matching device and exclusive open, and checks the active Windows process list before touching hardware and again before sending the packet.
+
+### How to test
+
+Open **Devices → Direct Wireless V1 receiver discovery (experimental) → Probe actual RF groups (guarded)**. A response, if available, appears on Devices and Overview with channel, family, group count and RPM. If L-Connect's service or watchdog is running, the probe deliberately refuses and displays a warning. **Do not stop your L-Connect service solely to test this while it is responsible for cooling.** The default hardware profile remains controlled by L-Connect. No operation is performed in the background without a click.
+
+**Limitations to be resolved:** This is a first Windows WinUSB implementation and has not been hardware-validated. The generic `GUID_DEVINTERFACE_USB_DEVICE` SetupAPI path may not expose the vendor-specific WinUSB interface; in that case the probe fails safely. The local TX master MAC is not yet queried, so a receiver record is not proof that the corresponding group is *bound to this master*. V1 response parsing is independently documented, but RX firmware variations may require further work. The application makes no claim of safe PWM control, RGB output or LCD streaming. Under ordinary L-Connect operation the explicit service guard prevents a live query. Do not report unverified topology as actual bound devices.
+
+Protocol reference (independent reverse engineering):
+https://github.com/sgtaziz/lian-li-linux/blob/main/crates/lianli-devices/src/wireless/discovery.rs
+https://github.com/qdellp/wirelesscanvas-rgb/blob/main/TECHNICAL.md
+
+This release keeps the improved v0.12 USB LCD receiver inventory, fully offline L-Connect saved configuration research, combined support snapshot and v0.11.1 backup retention.

@@ -8,6 +8,8 @@ mod aura_descriptor;
 mod discovery;
 mod wireless_research;
 mod snapshot;
+mod wireless_protocol;
+mod wireless_winusb;
 mod backups;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
@@ -71,6 +73,7 @@ fn read_lianli_processes() -> String {
 }
 enum UpdateMessage { Checked(Option<update::Available>), Staged(update::Staged) }
 enum NativeMessage { Scanned(Vec<native::NativeDevice>), SystemScanned(String), AuraInspected(String), DescriptorInspected(Vec<aura_descriptor::DescriptorInfo>), WirelessDiscovered(discovery::DiscoveryReport), SettingsInspected(wireless_research::ResearchReport), SurveyDone(discovery::DiscoveryReport, wireless_research::ResearchReport),
+    LiveDiscovered(wireless_protocol::LiveTopology),
     PcScanned { hid: Result<Vec<native::NativeDevice>, String>,
         system: Result<String, String>, aura: Result<String, String> } }
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -90,6 +93,7 @@ struct App {
     aura_descriptor: Vec<aura_descriptor::DescriptorInfo>,
     wireless_report: Option<discovery::DiscoveryReport>,
     wireless_settings: Option<wireless_research::ResearchReport>,
+    live_topology: Option<wireless_protocol::LiveTopology>,
     confirm_backup_cleanup: bool,
     confirm_preview_reset: bool,
 }
@@ -105,7 +109,7 @@ impl Default for App {
             update_rx: None, available: None, staged: None,
             native_rx: Some(rx), native_devices: vec![], native_windows_json: String::new(), aura_pnp_json: String::new(),
             global_color: [100,150,255], global_brightness: 70, last_summary: String::new(),
-            page: Page::Overview, aura_descriptor: Vec::new(), wireless_report: None, wireless_settings: None, confirm_backup_cleanup: false, confirm_preview_reset: false }
+            page: Page::Overview, aura_descriptor: Vec::new(), wireless_report: None, wireless_settings: None, live_topology: None, confirm_backup_cleanup: false, confirm_preview_reset: false }
     }
 }
 impl eframe::App for App {
@@ -147,6 +151,14 @@ impl eframe::App for App {
                 Ok(Ok(NativeMessage::AuraInspected(report))) => {
                     self.aura_pnp_json = report;
                     self.status = "ASUS Aura PnP inspection completed (read-only)".into();
+                    self.native_rx = None;
+                }
+                Ok(Ok(NativeMessage::LiveDiscovered(topology))) => {
+                    self.status = format!(
+                        "V1 receiver replied with {} record(s), {} valid groups. No PWM/RGB writes.",
+                        topology.total_receiver_records, topology.groups.len()
+                    );
+                    self.live_topology = Some(topology);
                     self.native_rx = None;
                 }
                 Ok(Ok(NativeMessage::PcScanned { hid, system, aura })) => {
@@ -209,7 +221,7 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 ui.add_space(14.0);
                 ui.label(egui::RichText::new("LIANLITE").size(23.0).strong().color(cyan));
-                ui.label(egui::RichText::new("RUST NATIVE  /  v0.12").size(10.0).color(muted));
+                ui.label(egui::RichText::new("RUST NATIVE  /  v0.13").size(10.0).color(muted));
                 ui.add_space(35.0);
                 for (page, label) in [
                     (Page::Overview, "  Overview"),
@@ -250,7 +262,7 @@ impl eframe::App for App {
                         Page::Updates => "Application updates",
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new("v0.12.0").color(cyan).strong());
+                        ui.label(egui::RichText::new("v0.13.0").color(cyan).strong());
                     });
                 });
                 ui.label(egui::RichText::new(
@@ -271,7 +283,9 @@ impl eframe::App for App {
                                     (0, "WIRELESS ADAPTER TYPES", dongles.to_string(), "Windows PnP"),
                                     (1, "LCD USB RECEIVERS", lcd_receivers, "Windows USB 1CBE:0006"),
                                     (2, "SAVED CONFIG TYPES", saved_categories.to_string(), "offline L-Connect"),
-                                    (3, "LIVE RF GROUPS", "?".to_string(), "not yet queried"),
+                                    (3, "RX REPORTED GROUPS",
+                                        self.live_topology.as_ref().map_or("?".to_string(), |r| r.groups.len().to_string()),
+                                        if self.live_topology.is_some() {"GetDev; binding unverified"} else {"not queried"}),
                                 ] {
                                     egui::Frame::none().fill(card)
                                         .rounding(egui::Rounding::same(12.0_f32))
@@ -283,6 +297,19 @@ impl eframe::App for App {
                                         });
                                 }
                             });
+                            if let Some(topology) = &self.live_topology {
+                                ui.add_space(12.0);
+                                egui::Frame::none().fill(card)
+                                    .rounding(egui::Rounding::same(12.0_f32))
+                                    .stroke(border).inner_margin(14.0).show(ui, |ui| {
+                                        ui.heading("Devices reported by V1 receiver");
+                                        ui.small("Master binding unverified; report may include foreign wireless devices.");
+                                        for group in &topology.groups {
+                                            ui.label(format!("RF {}  ·  {}  ·  {} fan(s)  ·  RPM {:?}",
+                                                group.channel, group.kind, group.fan_count, group.fan_rpm));
+                                        }
+                                    });
+                            }
                             ui.add_space(12.0);
                             egui::Frame::none().fill(card).rounding(egui::Rounding::same(12.0_f32))
                                 .stroke(border).inner_margin(14.0).show(ui, |ui| {
@@ -427,6 +454,26 @@ impl eframe::App for App {
                             egui::Frame::none().fill(card).rounding(egui::Rounding::same(12.0_f32))
                                 .stroke(border).inner_margin(17.0).show(ui, |ui| {
                                     ui.heading("Native device discovery");
+                                    ui.add_space(8.0);
+                                    ui.heading("Direct Wireless V1 receiver discovery (experimental)");
+                                    ui.label(egui::RichText::new(
+                                        "GetDev reads real receiver group records (fan count, family, RF channel, RPM). Requires exclusive access: will refuse while L-Connect service/watchdog is running. Never stops services or adjusts fan PWM."
+                                    ).color(muted));
+                                    if ui.add_enabled(self.native_rx.is_none(), egui::Button::new("Probe actual RF groups (guarded)")).clicked() {
+                                        let (tx,rx) = mpsc::channel(); self.native_rx = Some(rx);
+                                        std::thread::spawn(move || {
+                                            let _ = tx.send(wireless_winusb::probe().map(NativeMessage::LiveDiscovered));
+                                        });
+                                    }
+                                    if let Some(topology) = &self.live_topology {
+                                        ui.label(format!("Receiver reports {} record(s). Valid device records: {}",
+                                            topology.total_receiver_records, topology.groups.len()));
+                                        for group in &topology.groups {
+                                            ui.label(format!("Channel {}: {} — {} fan(s) — RPM {:?}",
+                                                group.channel, group.kind, group.fan_count, group.fan_rpm));
+                                        }
+                                    }
+                                    ui.separator();
                                     if ui.add_enabled(self.native_rx.is_none(), egui::Button::new("Scan PC hardware in one click")).clicked() {
                                         let (tx,rx) = mpsc::channel(); self.native_rx = Some(rx);
                                         std::thread::spawn(move || {
