@@ -7,6 +7,7 @@ mod diagnostics;
 mod aura_descriptor;
 mod discovery;
 mod wireless_research;
+mod snapshot;
 mod backups;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
@@ -69,7 +70,9 @@ fn read_lianli_processes() -> String {
     }
 }
 enum UpdateMessage { Checked(Option<update::Available>), Staged(update::Staged) }
-enum NativeMessage { Scanned(Vec<native::NativeDevice>), SystemScanned(String), AuraInspected(String), DescriptorInspected(Vec<aura_descriptor::DescriptorInfo>), WirelessDiscovered(discovery::DiscoveryReport), SettingsInspected(wireless_research::ResearchReport) }
+enum NativeMessage { Scanned(Vec<native::NativeDevice>), SystemScanned(String), AuraInspected(String), DescriptorInspected(Vec<aura_descriptor::DescriptorInfo>), WirelessDiscovered(discovery::DiscoveryReport), SettingsInspected(wireless_research::ResearchReport), SurveyDone(discovery::DiscoveryReport, wireless_research::ResearchReport),
+    PcScanned { hid: Result<Vec<native::NativeDevice>, String>,
+        system: Result<String, String>, aura: Result<String, String> } }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Page { Overview, Devices, Diagnostics, Updates }
 struct App {
@@ -88,6 +91,7 @@ struct App {
     wireless_report: Option<discovery::DiscoveryReport>,
     wireless_settings: Option<wireless_research::ResearchReport>,
     confirm_backup_cleanup: bool,
+    confirm_preview_reset: bool,
 }
 impl Default for App {
     fn default() -> Self {
@@ -95,13 +99,13 @@ impl Default for App {
             .and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
         profile::validate(&mut config);
         let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || { let _ = tx.send(Ok(NativeMessage::WirelessDiscovered(discovery::scan()))); });
+        std::thread::spawn(move || { let _ = tx.send(Ok(NativeMessage::SurveyDone(discovery::scan(), wireless_research::inspect()))); });
         Self { config, hid: Vec::new(), process_report: "Not checked yet".into(),
             status: "Read-only hardware mode. No USB commands will be sent.".into(),
             update_rx: None, available: None, staged: None,
             native_rx: Some(rx), native_devices: vec![], native_windows_json: String::new(), aura_pnp_json: String::new(),
             global_color: [100,150,255], global_brightness: 70, last_summary: String::new(),
-            page: Page::Overview, aura_descriptor: Vec::new(), wireless_report: None, wireless_settings: None, confirm_backup_cleanup: false }
+            page: Page::Overview, aura_descriptor: Vec::new(), wireless_report: None, wireless_settings: None, confirm_backup_cleanup: false, confirm_preview_reset: false }
     }
 }
 impl eframe::App for App {
@@ -145,6 +149,32 @@ impl eframe::App for App {
                     self.status = "ASUS Aura PnP inspection completed (read-only)".into();
                     self.native_rx = None;
                 }
+                Ok(Ok(NativeMessage::PcScanned { hid, system, aura })) => {
+                    let mut outcomes = Vec::new();
+                    match hid {
+                        Ok(found) => { outcomes.push(format!("HID: {} entries", found.len())); self.native_devices = found; }
+                        Err(e) => outcomes.push(format!("HID error: {e}")),
+                    }
+                    match system {
+                        Ok(data) => { outcomes.push("GPU/RAM: read".into()); self.native_windows_json = data; }
+                        Err(e) => outcomes.push(format!("GPU/RAM error: {e}")),
+                    }
+                    match aura {
+                        Ok(data) => { outcomes.push("ASUS PnP: read".into()); self.aura_pnp_json = data; }
+                        Err(e) => outcomes.push(format!("ASUS PnP error: {e}")),
+                    }
+                    self.status = outcomes.join(" | ");
+                    self.native_rx = None;
+                }
+                Ok(Ok(NativeMessage::SurveyDone(discovered, schema))) => {
+                    self.status = format!(
+                        "Offline survey: {} adapter types, {} saved records, {} structural fields; live wireless topology unverified.",
+                        discovered.dongles.len(), schema.typed_records, schema.fields.len()
+                    );
+                    self.wireless_report = Some(discovered);
+                    self.wireless_settings = Some(schema);
+                    self.native_rx = None;
+                }
                 Ok(Ok(NativeMessage::SettingsInspected(report))) => {
                     self.status = format!("L-Connect saved settings: {} records, {} distinct type/shape entries. No live RF query.",
                         report.typed_records, report.record_types.len());
@@ -168,13 +198,6 @@ impl eframe::App for App {
                 Err(mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(150)),
             }
         }
-        let mut visuals = egui::Visuals::dark();
-        visuals.panel_fill = egui::Color32::from_rgb(13, 17, 28);
-        visuals.window_fill = egui::Color32::from_rgb(19, 24, 36);
-        visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(32, 40, 55);
-        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(41, 59, 78);
-        visuals.selection.bg_fill = egui::Color32::from_rgb(49, 123, 169);
-        ctx.set_visuals(visuals);
         let cyan = egui::Color32::from_rgb(90, 213, 230);
         let muted = egui::Color32::from_rgb(147, 165, 186);
         let card = egui::Color32::from_rgb(24, 31, 46);
@@ -186,7 +209,7 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 ui.add_space(14.0);
                 ui.label(egui::RichText::new("LIANLITE").size(23.0).strong().color(cyan));
-                ui.label(egui::RichText::new("RUST NATIVE  /  v0.11.1").size(10.0).color(muted));
+                ui.label(egui::RichText::new("RUST NATIVE  /  v0.12").size(10.0).color(muted));
                 ui.add_space(35.0);
                 for (page, label) in [
                     (Page::Overview, "  Overview"),
@@ -227,7 +250,7 @@ impl eframe::App for App {
                         Page::Updates => "Application updates",
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new("v0.11.1").color(cyan).strong());
+                        ui.label(egui::RichText::new("v0.12.0").color(cyan).strong());
                     });
                 });
                 ui.label(egui::RichText::new(
@@ -238,13 +261,16 @@ impl eframe::App for App {
                     match self.page {
                         Page::Overview => {
                             let dongles = self.wireless_report.as_ref().map_or(0, |r| r.dongles.len());
-                            let saved_groups = self.wireless_report.as_ref().map_or(0, |r| r.groups.len());
-                            let saved_fans = self.wireless_report.as_ref().map_or(0, |r| r.identified_fans());
+                            let lcd_receivers = self.wireless_report.as_ref()
+                                .and_then(|r| r.lcd_usb_receivers)
+                                .map_or("?".into(), |n| n.to_string());
+                            let saved_categories = self.wireless_settings.as_ref()
+                                .map_or(0, |r| r.record_types.len());
                             ui.columns(4, |columns| {
                                 for (col, title, value, info) in [
                                     (0, "WIRELESS ADAPTER TYPES", dongles.to_string(), "Windows PnP"),
-                                    (1, "SAVED GROUP RECORDS", saved_groups.to_string(), "historical config"),
-                                    (2, "SAVED FAN QUANTITY", saved_fans.to_string(), "not a live count"),
+                                    (1, "LCD USB RECEIVERS", lcd_receivers, "Windows USB 1CBE:0006"),
+                                    (2, "SAVED CONFIG TYPES", saved_categories.to_string(), "offline L-Connect"),
                                     (3, "LIVE RF GROUPS", "?".to_string(), "not yet queried"),
                                 ] {
                                     egui::Frame::none().fill(card)
@@ -262,13 +288,17 @@ impl eframe::App for App {
                                 .stroke(border).inner_margin(14.0).show(ui, |ui| {
                                     ui.heading("Discovery from your PC");
                                     ui.label(egui::RichText::new("Adapter IDs are detected from Windows. FanQuantity values may come from old L-Connect settings, NOT live wireless groups.").color(muted));
-                                    if ui.add_enabled(self.native_rx.is_none(), egui::Button::new("Refresh device inventory")).clicked() {
+                                    if ui.add_enabled(self.native_rx.is_none(), egui::Button::new("Refresh offline discovery")).clicked() {
                                         let (tx,rx) = mpsc::channel(); self.native_rx = Some(rx);
-                                        std::thread::spawn(move || { let _ = tx.send(Ok(NativeMessage::WirelessDiscovered(discovery::scan()))); });
+                                        std::thread::spawn(move || { let _ = tx.send(Ok(NativeMessage::SurveyDone(discovery::scan(), wireless_research::inspect()))); });
                                     }
                                     if self.native_rx.is_some() { ui.spinner(); }
                                     if let Some(report) = &self.wireless_report {
                                         for adapter in &report.dongles { ui.label(format!("Adapter detected: {}",adapter.model)); }
+                                        ui.label(match report.lcd_usb_receivers {
+                                            Some(n) => format!("Actual LCD USB receiver roots detected: {n} (not RF groups)"),
+                                            None => "LCD USB receiver inventory unavailable".into(),
+                                        });
                                         for group in &report.groups {
                                             ui.label(format!("Saved setting: {}  |  {} fan(s)  |  not live",
                                                 group.name, group.fan_count.unwrap_or(0)));
@@ -279,6 +309,24 @@ impl eframe::App for App {
                                         }
                                     }
                                 });
+                            if let Some(schema) = &self.wireless_settings {
+                                let candidates: Vec<_> = schema.record_types.iter().filter(|item|
+                                    ["Fan", "GroupLCD", "SingleLCD", "Strimer"].contains(&item.setting_type.as_str())
+                                ).collect();
+                                ui.add_space(8.0);
+                                if !candidates.is_empty() {
+                                    egui::Frame::none().fill(card).rounding(egui::Rounding::same(12.0_f32))
+                                        .stroke(border).inner_margin(14.0).show(ui, |ui| {
+                                            ui.heading("Saved L-Connect categories (not live groups)");
+                                            ui.horizontal_wrapped(|ui| {
+                                                for item in candidates {
+                                                    ui.label(format!("{}: {} saved record(s)", item.setting_type, item.records));
+                                                }
+                                            });
+                                            ui.label(egui::RichText::new("Live 2/3/3 wireless fan topology still requires verified controller discovery.").color(muted));
+                                        });
+                                }
+                            }
                             ui.add_space(18.0);
                             egui::Frame::none().fill(card).rounding(egui::Rounding::same(12.0_f32))
                                 .stroke(border).inner_margin(17.0).show(ui, |ui| {
@@ -320,6 +368,29 @@ impl eframe::App for App {
                             if ui.button("Add manual preview zone").clicked() {
                                 self.config.groups.push(Group { name: format!("Preview zone {}", self.config.groups.len()+1), count: 1, speed_percent: 65, brightness: 70, rgb: self.global_color });
                             }
+                            if !self.config.groups.is_empty() {
+                                if !self.confirm_preview_reset {
+                                    if ui.button("Clear manual preview zones...").clicked() {
+                                        self.confirm_preview_reset = true;
+                                    }
+                                } else {
+                                    ui.colored_label(egui::Color32::from_rgb(246, 194, 107),
+                                        "This clears only saved manual preview zones. It does not touch L-Connect or any hardware.");
+                                    ui.horizontal(|ui| {
+                                        if ui.button("Confirm clear preview zones").clicked() {
+                                            self.config.groups.clear();
+                                            self.confirm_preview_reset = false;
+                                            self.status = match save(&self.config) {
+                                                Ok(()) => "Cleared saved manual preview zones. Hardware unchanged.".into(),
+                                                Err(e) => format!("Zones cleared locally, but saving failed: {e}"),
+                                            };
+                                        }
+                                        if ui.button("Cancel").clicked() {
+                                            self.confirm_preview_reset = false;
+                                        }
+                                    });
+                                }
+                            }
                             for group in &mut self.config.groups {
                                 egui::Frame::none().fill(card).rounding(egui::Rounding::same(11.0_f32))
                                     .stroke(border).inner_margin(15.0).show(ui, |ui| {
@@ -356,10 +427,19 @@ impl eframe::App for App {
                             egui::Frame::none().fill(card).rounding(egui::Rounding::same(12.0_f32))
                                 .stroke(border).inner_margin(17.0).show(ui, |ui| {
                                     ui.heading("Native device discovery");
+                                    if ui.add_enabled(self.native_rx.is_none(), egui::Button::new("Scan PC hardware in one click")).clicked() {
+                                        let (tx,rx) = mpsc::channel(); self.native_rx = Some(rx);
+                                        std::thread::spawn(move || {
+                                            let hid = native::scan_hid();
+                                            let system = native::scan_gpu_and_memory();
+                                            let aura = native::inspect_aura_pnp();
+                                            let _ = tx.send(Ok(NativeMessage::PcScanned { hid, system, aura }));
+                                        });
+                                    }
                                     ui.label(egui::RichText::new("Live wireless group discovery is unavailable while L-Connect owns the WinUSB TX/RX devices. No services are stopped.").color(muted));
-                                    if ui.add_enabled(self.native_rx.is_none(), egui::Button::new("Refresh wireless adapter + saved settings")).clicked() {
+                                    if ui.add_enabled(self.native_rx.is_none(), egui::Button::new("Refresh offline discovery")).clicked() {
                                         let (tx,rx)=mpsc::channel(); self.native_rx=Some(rx);
-                                        std::thread::spawn(move || { let _=tx.send(Ok(NativeMessage::WirelessDiscovered(discovery::scan()))); });
+                                        std::thread::spawn(move || { let _=tx.send(Ok(NativeMessage::SurveyDone(discovery::scan(), wireless_research::inspect()))); });
                                     }
                                     if let Some(report) = &self.wireless_report {
                                         for adapter in &report.dongles { ui.label(format!("Detected PnP adapter: {}",adapter.model)); }
@@ -416,24 +496,67 @@ impl eframe::App for App {
                             egui::Frame::none().fill(card).rounding(egui::Rounding::same(12.0_f32))
                                 .stroke(border).inner_margin(18.0).show(ui, |ui| {
                                     ui.heading("Export diagnostic reports");
+                                    if ui.button("Export combined support snapshot (recommended)").clicked() {
+                                        self.status = match health::inspect() {
+                                            Ok(h) => {
+                                                let report = snapshot::compose(
+                                                    &self.native_devices, &self.native_windows_json, &self.aura_pnp_json,
+                                                    &h, self.wireless_report.as_ref(), self.wireless_settings.as_ref()
+                                                );
+                                                self.last_summary = serde_json::to_string_pretty(&report).unwrap_or_default();
+                                                match snapshot::export(&report) {
+                                                    Ok(path) => format!("Combined support snapshot saved: {}", path.display()),
+                                                    Err(e) => format!("Snapshot export error: {e}"),
+                                                }
+                                            }
+                                            Err(e) => format!("Unable to inspect installation: {e}"),
+                                        };
+                                    }
+                                    ui.label(egui::RichText::new(
+                                        "One support file with hardware flags and saved wireless structure. Scan PC hardware first to fill GPU/RAM/ASUS fields."
+                                    ).color(muted));
                                     ui.add_space(7.0);
-                                    ui.heading("L-Connect saved-settings schema (offline)");
+                                    ui.heading("L-Connect saved-settings structure (offline)");
+                                    ui.label(egui::RichText::new("Includes nested JSON key shapes and saved array lengths. Never represents live RF fan counts.").color(muted));
                                     if ui.add_enabled(self.native_rx.is_none(), egui::Button::new("Analyze saved setting types")).clicked() {
                                         let (tx,rx) = mpsc::channel(); self.native_rx = Some(rx);
                                         std::thread::spawn(move || { let _ = tx.send(Ok(NativeMessage::SettingsInspected(wireless_research::inspect()))); });
                                     }
                                     if let Some(report) = &self.wireless_settings {
-                                        ui.label(format!("{} readable typed records; {} different type / value shapes",
-                                            report.typed_records, report.record_types.len()));
+                                        ui.label(format!("{} saved records, {} categories, {} sanitized structural fields",
+                                            report.typed_records, report.record_types.len(), report.fields.len()));
                                         for record in &report.record_types {
                                             ui.label(format!("{}  ·  {}  ·  {} record(s){}",
                                                 record.setting_type, record.value_shape, record.records,
                                                 if record.wireless_candidate { "  ·  wireless candidate (unverified)" } else { "" }));
                                         }
-                                        if ui.button("Export schema summary (no IDs)").clicked() {
+                                        ui.collapsing("Inspect saved field structure (keys only)", |ui| {
+                                            for row in &report.fields {
+                                                let cardinality = match (row.stored_array_min, row.stored_array_max) {
+                                                    (Some(min), Some(max)) if min == max => format!(" | saved array length {min}"),
+                                                    (Some(min), Some(max)) => format!(" | saved array lengths {min}–{max}"),
+                                                    _ => String::new(),
+                                                };
+                                                ui.small(format!("{} / {} : {} × {}{}",
+                                                    row.setting_type, row.field_path, row.value_shape,
+                                                    row.occurrences, cardinality));
+                                            }
+                                            if report.field_rows_truncated {
+                                                ui.label("Field list capped for privacy and performance.");
+                                            }
+                                        });
+                                        if ui.button("Export v0.12 nested schema (no IDs)").clicked() {
                                             self.status = match wireless_research::export(report) {
                                                 Ok(path) => format!("Saved offline schema to {}",path.display()),
                                                 Err(e) => format!("Schema export error: {e}"),
+                                            };
+                                        }
+                                    }
+                                    if let (Some(wireless), Some(schema)) = (&self.wireless_report, &self.wireless_settings) {
+                                        if ui.button("Export both offline discovery reports").clicked() {
+                                            self.status = match (discovery::export(wireless), wireless_research::export(schema)) {
+                                                (Ok(a), Ok(b)) => format!("Saved wireless reports: {} and {}", a.display(), b.display()),
+                                                (Err(e), _) | (_, Err(e)) => format!("Some report exports failed: {e}"),
                                             };
                                         }
                                     }
@@ -591,5 +714,16 @@ impl eframe::App for App {
 }
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions { viewport: egui::ViewportBuilder::default().with_inner_size([1060.0, 740.0]), ..Default::default() };
-    eframe::run_native("LianLite", options, Box::new(|_| Ok(Box::new(App::default()))))
+    eframe::run_native("LianLite", options, Box::new(|cc| {
+        // Set the palette once. Re-applying Visuals every frame causes avoidable
+        // style mutations and repaints on a lightweight monitoring UI.
+        let mut visuals = egui::Visuals::dark();
+        visuals.panel_fill = egui::Color32::from_rgb(13, 17, 28);
+        visuals.window_fill = egui::Color32::from_rgb(19, 24, 36);
+        visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(32, 40, 55);
+        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(41, 59, 78);
+        visuals.selection.bg_fill = egui::Color32::from_rgb(49, 123, 169);
+        cc.egui_ctx.set_visuals(visuals);
+        Ok(Box::new(App::default()))
+    }))
 }

@@ -26,6 +26,7 @@ pub struct DongleEvidence {
 pub struct DiscoveryReport {
     pub groups: Vec<GroupEvidence>,
     pub dongles: Vec<DongleEvidence>,
+    pub lcd_usb_receivers: Option<usize>,
     pub saved_records_checked: usize,
     pub warnings: Vec<String>,
     pub live_rf_groups_verified: bool,
@@ -44,11 +45,14 @@ fn identify_adapter(id: &str) -> Option<&'static str> {
         ("VID_1A86&PID_E305", "L-Wireless V2 RX"),
     ].iter().find_map(|(key,name)| upper.contains(key).then_some(*name))
 }
-fn windows_dongles() -> Result<Vec<DongleEvidence>, String> {
+fn is_lcd_receiver_root(instance_id: &str) -> bool {
+    instance_id.to_ascii_uppercase().starts_with("USB\\VID_1CBE&PID_0006\\")
+}
+fn windows_dongles() -> Result<(Vec<DongleEvidence>, usize), String> {
     // A PnP inventory is NOT a discovery protocol and may return multiple interfaces.
     let code = r#"$ErrorActionPreference='Stop'
 @(Get-PnpDevice -PresentOnly | Where-Object {
-  $_.InstanceId -match 'VID_(0416&PID_804[01]|1A86&PID_E30[45])'
+  $_.InstanceId -match 'VID_(0416&PID_804[01]|1A86&PID_E30[45]|1CBE&PID_0006)'
 } | Select-Object -ExpandProperty InstanceId) | ConvertTo-Json -Compress"#;
     let output = Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command", code])
@@ -63,7 +67,15 @@ fn windows_dongles() -> Result<Vec<DongleEvidence>, String> {
         _ => vec![],
     };
     let unique: BTreeSet<&str> = ids.iter().filter_map(|x| identify_adapter(x)).collect();
-    Ok(unique.into_iter().map(|model| DongleEvidence { model: model.to_owned(), detected: true }).collect())
+    // Only the root USB instance is counted. Composite HID/MI_XX interfaces
+    // are not separate LCD fans. These endpoints cannot reveal RF grouping.
+    let lcd = ids.iter()
+        .filter(|id| is_lcd_receiver_root(id))
+        .map(|id| id.to_ascii_uppercase())
+        .collect::<BTreeSet<_>>().len();
+    Ok((unique.into_iter().map(|model| DongleEvidence {
+        model: model.to_owned(), detected: true
+    }).collect(), lcd))
 }
 
 fn walk_files(root: &Path, files: &mut Vec<PathBuf>, depth: u8) {
@@ -132,23 +144,28 @@ pub fn scan() -> DiscoveryReport {
         "FanQuantity comes from historical L-Connect settings; do not treat as live devices.".to_string(),
         "RF GetDev channel discovery is not implemented; no USB commands are sent.".to_string(),
     ];
-    let dongles = windows_dongles().unwrap_or_else(|e| {
-        warnings.push(format!("Cannot read Windows PnP: {e}"));
-        vec![]
-    });
+    let (dongles, lcd_usb_receivers) = match windows_dongles() {
+        Ok((adapters, count)) => (adapters, Some(count)),
+        Err(_) => {
+            // Do not leak PowerShell errors containing local paths or IDs into reports.
+            warnings.push("Windows PnP inventory unavailable (local query failed).".into());
+            (vec![], None)
+        }
+    };
+    warnings.push("USB 1CBE:0006 receivers may represent individual TL Wireless LCD modules; their count is NOT RF group topology.".into());
     let root = std::env::var_os("PROGRAMDATA").map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"))
         .join("Lian-Li").join("L-Connect 3").join("device");
     let (groups, checked) = saved_groups(&root);
     if checked == 0 { warnings.push("No readable L-Connect saved device settings found.".into()); }
-    DiscoveryReport { groups, dongles, saved_records_checked: checked,
+    DiscoveryReport { groups, dongles, lcd_usb_receivers, saved_records_checked: checked,
         warnings, live_rf_groups_verified: false }
 }
 pub fn export(report: &DiscoveryReport) -> Result<PathBuf,String> {
     let root = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
     let dir = root.join("LianLite");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let path = dir.join("wireless-discovery-v010.json");
+    let path = dir.join("wireless-discovery-v012.json");
     let json = serde_json::to_vec_pretty(report).map_err(|e|e.to_string())?;
     fs::write(&path,json).map_err(|e|e.to_string())?;
     Ok(path)
@@ -161,13 +178,18 @@ mod tests {
         assert_eq!(identify_adapter("USB\\VID_1A86&PID_E305\\A"),Some("L-Wireless V2 RX"));
         assert_eq!(identify_adapter("USB\\VID_1A86&PID_2107\\A"),None);
     }
+    #[test] fn counts_only_usb_lcd_root_not_interface() {
+        assert!(is_lcd_receiver_root("USB\\VID_1CBE&PID_0006\\LCD001"));
+        assert!(!is_lcd_receiver_root("USB\\VID_1CBE&PID_0006&MI_00\\LCD001"));
+        assert!(!is_lcd_receiver_root("HID\\VID_1CBE&PID_0006\\LCD001"));
+    }
     #[test] fn saved_fan_count_is_bounded_and_typed() {
         assert_eq!(fan_count("FanQuantity", &serde_json::json!(3)),Some(3));
         assert_eq!(fan_count("FanQuantity", &serde_json::json!(9)),None);
         assert_eq!(fan_count("Other", &serde_json::json!(3)),None);
     }
     #[test] fn empty_report_never_claims_live_groups() {
-        let report=DiscoveryReport { groups:vec![], dongles:vec![],
+        let report=DiscoveryReport { groups:vec![], dongles:vec![], lcd_usb_receivers:None,
             saved_records_checked:0,warnings:vec![],live_rf_groups_verified:false };
         assert_eq!(report.identified_fans(),0);
         assert!(!report.live_rf_groups_verified);
