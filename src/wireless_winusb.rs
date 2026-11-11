@@ -40,7 +40,7 @@ mod platform {
 #[cfg(windows)]
 mod platform {
     use super::*;
-    use std::{ffi::c_void, ptr, mem, slice};
+    use std::{ffi::c_void, ptr, mem};
     type Handle = *mut c_void;
     type Bool = i32;
     const DIGCF_PRESENT:u32 = 2;
@@ -183,6 +183,6 @@ mod tests {
     // Pure-parser hardware tests live in wireless_protocol.rs.
     // Keep the explicit-owner guard independent of USB enumeration.
     #[test] fn no_background_probing() {
-        assert!(super::std::mem::size_of::<super::LiveTopology>()>0);
+        assert!(std::mem::size_of::<super::LiveTopology>()>0);
     }
 }
