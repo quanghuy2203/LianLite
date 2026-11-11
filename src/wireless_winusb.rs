@@ -25,15 +25,23 @@ fn check_owner() -> Result<(), String> {
         return Err("Cannot verify L-Connect service state; USB probe refused".into());
     }
     let csv = String::from_utf8_lossy(&result.stdout).to_ascii_lowercase();
-    let service_running = csv.lines().any(|line| {
-        let name = line.split(',').next().unwrap_or("").trim_matches('"');
-        name == "l-connect-service.exe" || name == "l-connect-service-watcher.exe"
-            || name == "lconnectservice.exe"
-    });
+    let service_running = process_list_has_owner(&csv);
     if service_running {
         return Err("L-Connect service/watchdog is running and owns the L-Wireless controller. Probe blocked to protect active cooling. No service was stopped.".into());
     }
     Ok(())
+}
+
+// Fail closed for the known service, watchdog and GUI variants. This does not
+// prove absence of every possible service owner; exclusive open is still needed.
+fn process_list_has_owner(csv: &str) -> bool {
+    csv.lines().any(|line| {
+        let name = line.split(',').next().unwrap_or("").trim().trim_matches('"');
+        matches!(name,
+            "l-connect-service.exe" | "l-connect-service-watcher.exe"
+            | "lconnectservice.exe" | "l-connect 3.exe" | "l-connect 3"
+            | "l-connect.exe" | "lconnect3.exe")
+    })
 }
 
 #[cfg(not(windows))]
@@ -56,7 +64,9 @@ mod platform {
     const GENERIC_READ:u32 = 0x80000000;
     const GENERIC_WRITE:u32 = 0x40000000;
     const OPEN_EXISTING:u32 = 3;
-    const FILE_FLAG_OVERLAPPED:u32 = 0x40000000;
+    // Synchronous WinUSB reads/writes pass null OVERLAPPED. The file must
+    // therefore be opened synchronously, not with FILE_FLAG_OVERLAPPED.
+    const SYNCHRONOUS_FILE_FLAGS:u32 = 0;
     const PIPE_TRANSFER_TIMEOUT:u32 = 3;
     const MAX_INTERFACES:u32 = 1024;
     // GUID_DEVINTERFACE_USB_DEVICE: A5DCBF10-6530-11D2-901F-00C04FB951ED
@@ -153,7 +163,7 @@ mod platform {
         // Re-check immediately before any access. No service is stopped.
         check_owner()?;
         let file=unsafe {CreateFileW(paths[0].as_ptr(), GENERIC_READ|GENERIC_WRITE,0,
-            ptr::null(),OPEN_EXISTING,FILE_FLAG_OVERLAPPED,ptr::null_mut())};
+            ptr::null(),OPEN_EXISTING,SYNCHRONOUS_FILE_FLAGS,ptr::null_mut())};
         if bad(file) {
             return Err("RX WinUSB interface could not be opened exclusively. L-Connect may still own it.".into());
         }
@@ -191,6 +201,11 @@ mod platform {
 mod tests {
     // Pure-parser hardware tests live in wireless_protocol.rs.
     // Keep the explicit-owner guard independent of USB enumeration.
+    #[test] fn detects_service_and_watchdog_variants() {
+        assert!(super::process_list_has_owner("\\"L-Connect-Service.exe\\",123,Console,1,10 K"));
+        assert!(super::process_list_has_owner("\\"l-connect-service-watcher.exe\\",1,Services,0,5 K"));
+        assert!(!super::process_list_has_owner("\\"explorer.exe\\",2,Console,1,5 K"));
+    }
     #[test] fn no_background_probing() {
         assert!(std::mem::size_of::<super::LiveTopology>()>0);
     }
