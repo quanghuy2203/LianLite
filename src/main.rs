@@ -1,6 +1,9 @@
 #![windows_subsystem = "windows"]
 mod update;
 mod native;
+mod profile;
+mod health;
+mod diagnostics;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf, process::Command, sync::mpsc::{self, Receiver}};
@@ -75,15 +78,20 @@ struct App {
     native_devices: Vec<native::NativeDevice>,
     native_windows_json: String,
     aura_pnp_json: String,
+    global_color: [u8;3],
+    global_brightness: u8,
+    last_summary: String,
 }
 impl Default for App {
     fn default() -> Self {
-        let config = fs::read(config_path()).ok()
+        let mut config: Config = fs::read(config_path()).ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
+        profile::validate(&mut config);
         Self { config, hid: Vec::new(), process_report: "Not checked yet".into(),
             status: "Read-only hardware mode. No USB commands will be sent.".into(),
             update_rx: None, available: None, staged: None,
-            native_rx: None, native_devices: vec![], native_windows_json: String::new(), aura_pnp_json: String::new() }
+            native_rx: None, native_devices: vec![], native_windows_json: String::new(), aura_pnp_json: String::new(),
+            global_color: [100,150,255], global_brightness: 70, last_summary: String::new() }
     }
 }
 impl eframe::App for App {
@@ -135,7 +143,7 @@ impl eframe::App for App {
             }
         }
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("LianLite 0.7.1  ·  Ultra Minimal");
+            ui.heading("LianLite 0.8.0  ·  Ultra Minimal");
             ui.label("Windows 11 | Native RGB controller research · no OpenRGB required");
             ui.colored_label(egui::Color32::YELLOW, "Lian Li fan/LCD control remains disabled. Keep L-Connect services running.");
             ui.separator();
@@ -172,6 +180,34 @@ impl eframe::App for App {
                     }
                 });
                 if self.update_rx.is_some() { ui.spinner(); ui.label("Working in background..."); }
+                ui.separator();
+                ui.heading("Profiles · Local preview only");
+                ui.horizontal(|ui| {
+                    for preset in [profile::Preset::Silent, profile::Preset::Balanced, profile::Preset::Performance] {
+                        if ui.button(preset.name()).clicked() {
+                            profile::apply(&mut self.config, preset);
+                            self.status = format!("{} local preview applied. Hardware unchanged.", preset.name());
+                        }
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Global RGB preview:");
+                    let mut global = egui::Color32::from_rgb(self.global_color[0], self.global_color[1], self.global_color[2]);
+                    if ui.color_edit_button_srgba(&mut global).changed() {
+                        self.global_color = [global.r(), global.g(), global.b()];
+                    }
+                    if ui.button("Sync preview color").clicked() {
+                        profile::all_same_color(&mut self.config, self.global_color);
+                        self.status = "Preview colors matched across all fan groups. No USB writes.".into();
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.add(egui::Slider::new(&mut self.global_brightness, 0..=100).text("Global brightness"));
+                    if ui.button("Apply brightness preview").clicked() {
+                        profile::all_brightness(&mut self.config, self.global_brightness);
+                        self.status = "Preview brightness set on fans and Strimers. Hardware unchanged.".into();
+                    }
+                });
                 ui.separator();
                 ui.heading("Fan groups");
                 for group in &mut self.config.groups {
@@ -239,6 +275,48 @@ impl eframe::App for App {
                 ui.collapsing("GPU/RAM inventory (read-only)", |ui| {
                     ui.monospace(&self.native_windows_json);
                 });
+                ui.separator();
+                ui.heading("Reports and logs");
+                if ui.button("Open LianLite reports folder").clicked() {
+                    let base = std::env::var_os("APPDATA").map(PathBuf::from)
+                        .unwrap_or_else(|| PathBuf::from("."));
+                    let folder = base.join("LianLite");
+                    self.status = match fs::create_dir_all(&folder)
+                        .and_then(|_| Command::new("explorer.exe").arg(&folder).spawn().map(|_| ())) {
+                        Ok(()) => "Reports folder opened in Explorer".into(),
+                        Err(e) => format!("Cannot open reports folder: {e}"),
+                    };
+                }
+                ui.separator();
+                ui.heading("Update and installation health");
+                if ui.button("Check install / updater").clicked() {
+                    match health::inspect() {
+                        Ok(h) => self.status = format!(
+                            "Updater: {} | Backup: {} | Older backup: {} | Pending: {}",
+                            if h.updater_present {"present"} else {"missing"},
+                            h.backup_present, h.old_backup_present, h.pending_present
+                        ),
+                        Err(e) => self.status = format!("Health check failed: {e}"),
+                    }
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Export privacy-safe diagnostic summary").clicked() {
+                        match health::inspect() {
+                            Ok(h) => {
+                                let summary = diagnostics::summary(
+                                    &self.native_devices, &self.native_windows_json, &self.aura_pnp_json, &h
+                                );
+                                self.last_summary = serde_json::to_string_pretty(&summary).unwrap_or_default();
+                                self.status = match diagnostics::export(&summary) {
+                                    Ok(path) => format!("Saved {}. No PnP instance IDs included.", path.display()),
+                                    Err(e) => format!("Summary export error: {e}"),
+                                };
+                            }
+                            Err(e) => self.status = format!("Summary error: {e}"),
+                        }
+                    }
+                });
+                ui.collapsing("Shareable summary preview", |ui| { ui.monospace(&self.last_summary); });
                 ui.separator();
                 ui.heading("Hardware diagnostics");
                 ui.horizontal(|ui| {
