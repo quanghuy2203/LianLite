@@ -1,4 +1,4 @@
-# LianLite v0.10.0 — Evidence-based Wireless device inventory
+# LianLite v0.11.0 — Wireless discovery research
 
 LianLite is a native Rust GUI for **read-only diagnostics** and **local configuration previews**. No OpenRGB installation is required.
 
@@ -117,3 +117,15 @@ Documentation:
 - Independent technical notes: https://github.com/qdellp/wirelesscanvas-rgb/blob/main/TECHNICAL.md
 
 The control surface remains preview-only. No cooling control, LCD writes, RF requests, HID feature/output transfers or L-Connect service changes have been implemented.
+
+## v0.11: offline inspection of L-Connect wireless settings
+
+The L-Wireless V1 TX/RX pair (0416:8040 / 0416:8041) is confirmed by Windows PnP on the user's system. LianLite v0.10 examined 16 saved configuration records but identified no `FanQuantity` groups. Instead of falsely showing 2/3/3 as live hardware, v0.11 adds a **read-only investigation of the saved settings types**.
+
+Go to **Diagnostics → Analyze saved setting types**; a background worker scans the existing `%PROGRAMDATA%\\Lian-Li\\L-Connect 3\\device` tree, counts decoded JSON/gzip entries and summarizes the `Type` field and the `Data` value shape (object/array/string/number etc.). The **Export schema summary (no IDs)** button creates `%APPDATA%\\LianLite\\wireless-settings-schema-v011.json`. This report contains only the setting-type strings and aggregate counts, **not raw values, controller MACs, DeviceID, serialized state, or file paths**. Unknown or malformed Type strings are redacted. The walker limits directory depth, file count, compressed input size and decompressed output size.
+
+This schema map helps identify which saved setting categories might describe bound wireless channels on this installed L-Connect version. A category that contains “wireless” or “bind” is marked as a **candidate only**, never a verified live channel. No direct USB GetDev/RF query is attempted while L-Connect controls WinUSB. In existing third-party implementations that perform live queries, the L-Connect service must relinquish the device first, so this release does not attempt that transition automatically.
+
+The existing v0.10 Windows PnP device discovery, manual preview-only profiles, privacy-safe hardware diagnostics and app/updater auto-update remain. Real fan RGB, PWM, LCD and L-Wireless channel control remain disabled.
+
+References: https://github.com/qdellp/wirelesscanvas-rgb/blob/main/TECHNICAL.md and https://github.com/lewisgibson/FanControl.LianLi/blob/main/docs/lighting.md
