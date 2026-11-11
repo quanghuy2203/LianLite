@@ -1,4 +1,4 @@
-# LianLite v0.8.0 — Ultra Minimal Rust Native (Windows 11)
+# LianLite v0.8.1 — Ultra Minimal Rust Native (Windows 11)
 
 LianLite is a native Rust GUI for **read-only diagnostics** and **local configuration previews**. No OpenRGB installation is required.
 
@@ -53,3 +53,17 @@ The privacy-safe summary excludes PnP Instance IDs, serials and filesystem paths
 - Research GPU SPECTRA and Lexar RAM RGB controllers without guessing SMBus writes.
 - Design a signed, transactional installer/updater capable of safely replacing the helper too.
 - Measure actual Windows memory use after build (no RAM reduction is asserted without benchmarks).
+
+## v0.8.1 — updater self-upgrade fix
+
+**Problem:** Previous versions download and replace only `lianlite.exe`. The old helper `lianlite-updater.exe` stays installed and can fail on pre-existing backups. The application may close without restarting.
+
+**Fix:** From v0.8.1 onward, the update client downloads `LianLite-Portable-Windows-x64.zip` **plus** its `.sha256` checksum from the public GitHub Release. The ZIP must contain exactly `lianlite.exe` and `lianlite-updater.exe`, both recognizable as Windows executable files. The app extracts the helper to a versioned folder outside the installation directory and stages the new GUI beside the current executable. On user confirmation it launches this newly downloaded helper. This helper safely rotates existing backups, replaces the main app, starts it, checks for an immediate exit, and then replaces the installed updater while preserving the old copy. If launching the new GUI fails immediately, it attempts to restore the previous GUI.
+
+All updates are user-initiated; no background installer, USB writes or admin permissions required. Release SHA-256 validates download integrity but is **not a digital signature** and does not protect against a compromised GitHub publishing account.
+
+**One-time migration:** An already-installed v0.8.0 or older app uses its old update logic. Updating the main executable to v0.8.1 using the legacy helper may still fail if old backups exist. In that case, the safest bootstrap is to exit LianLite, back up the working folder, download the `LianLite-Portable-Windows-x64.zip` **from the official v0.8.1 GitHub Release**, and extract both executables into a fresh writable folder, for example `%LOCALAPPDATA%\LianLite-App`. Open `lianlite.exe` from there. Existing profile settings remain in `%APPDATA%\LianLite\config.json`. Do not delete the old working folder or backups until the new install has been tested.
+
+Once v0.8.1 is installed, later releases can upgrade the installed helper as well as the GUI. Existing old backups remain preserved under numbered file names. Status logs (new helper) are in `%LOCALAPPDATA%\LianLite\updater-last-status.txt` and `updater-last-error.txt`. The app cannot guarantee long-term health based only on checking that the new process stays running for three seconds.
+
+**Note:** Do not describe this as an end-to-end tested updater until a real Windows 11 upgrade test completes successfully; GitHub Actions only verifies compilation/unit tests and package generation.

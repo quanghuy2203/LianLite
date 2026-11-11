@@ -68,12 +68,12 @@ fn read_lianli_processes() -> String {
         Err(e) => format!("Cannot run tasklist: {e}"),
     }
 }
-enum UpdateMessage { Checked(Option<update::Available>), Staged(PathBuf) }
+enum UpdateMessage { Checked(Option<update::Available>), Staged(update::Staged) }
 enum NativeMessage { Scanned(Vec<native::NativeDevice>), SystemScanned(String), AuraInspected(String) }
 struct App {
     config: Config, hid: Vec<HidEntry>, process_report: String, status: String,
     update_rx: Option<Receiver<Result<UpdateMessage, String>>>,
-    available: Option<update::Available>, staged: Option<PathBuf>,
+    available: Option<update::Available>, staged: Option<update::Staged>,
     native_rx: Option<Receiver<Result<NativeMessage, String>>>,
     native_devices: Vec<native::NativeDevice>,
     native_windows_json: String,
@@ -143,7 +143,7 @@ impl eframe::App for App {
             }
         }
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("LianLite 0.8.0  ·  Ultra Minimal");
+            ui.heading("LianLite 0.8.1  ·  Ultra Minimal");
             ui.label("Windows 11 | Native RGB controller research · no OpenRGB required");
             ui.colored_label(egui::Color32::YELLOW, "Lian Li fan/LCD control remains disabled. Keep L-Connect services running.");
             ui.separator();
@@ -170,9 +170,9 @@ impl eframe::App for App {
                             std::thread::spawn(move || { let _ = tx.send(update::stage(&a).map(UpdateMessage::Staged)); });
                         }
                     }
-                    if let Some(path) = self.staged.clone() {
+                    if let Some(ref path) = self.staged {
                         if ui.button("Install & restart").clicked() {
-                            match update::launch_helper(&path) {
+                            match update::launch_helper(path) {
                                 Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
                                 Err(e) => self.status = format!("Cannot install: {e}"),
                             }
