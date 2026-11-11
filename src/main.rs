@@ -4,6 +4,7 @@ mod native;
 mod profile;
 mod health;
 mod diagnostics;
+mod aura_descriptor;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf, process::Command, sync::mpsc::{self, Receiver}};
@@ -69,7 +70,9 @@ fn read_lianli_processes() -> String {
     }
 }
 enum UpdateMessage { Checked(Option<update::Available>), Staged(update::Staged) }
-enum NativeMessage { Scanned(Vec<native::NativeDevice>), SystemScanned(String), AuraInspected(String) }
+enum NativeMessage { Scanned(Vec<native::NativeDevice>), SystemScanned(String), AuraInspected(String), DescriptorInspected(Vec<aura_descriptor::DescriptorInfo>) }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Page { Overview, Devices, Diagnostics, Updates }
 struct App {
     config: Config, hid: Vec<HidEntry>, process_report: String, status: String,
     update_rx: Option<Receiver<Result<UpdateMessage, String>>>,
@@ -81,6 +84,8 @@ struct App {
     global_color: [u8;3],
     global_brightness: u8,
     last_summary: String,
+    page: Page,
+    aura_descriptor: Vec<aura_descriptor::DescriptorInfo>,
 }
 impl Default for App {
     fn default() -> Self {
@@ -91,7 +96,8 @@ impl Default for App {
             status: "Read-only hardware mode. No USB commands will be sent.".into(),
             update_rx: None, available: None, staged: None,
             native_rx: None, native_devices: vec![], native_windows_json: String::new(), aura_pnp_json: String::new(),
-            global_color: [100,150,255], global_brightness: 70, last_summary: String::new() }
+            global_color: [100,150,255], global_brightness: 70, last_summary: String::new(),
+            page: Page::Overview, aura_descriptor: Vec::new() }
     }
 }
 impl eframe::App for App {
@@ -135,6 +141,10 @@ impl eframe::App for App {
                     self.status = "ASUS Aura PnP inspection completed (read-only)".into();
                     self.native_rx = None;
                 }
+                Ok(Ok(NativeMessage::DescriptorInspected(info))) => {
+                    self.status = format!("ASUS HID descriptor read: {} interface(s). No hardware writes.", info.len());
+                    self.aura_descriptor = info; self.native_rx = None;
+                }
                 Ok(Err(e)) => { self.status = format!("Native scan error: {e}"); self.native_rx = None; }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.status = "Native scan worker disconnected".into(); self.native_rx = None;
@@ -142,211 +152,326 @@ impl eframe::App for App {
                 Err(mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(150)),
             }
         }
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("LianLite 0.8.1  ·  Ultra Minimal");
-            ui.label("Windows 11 | Native RGB controller research · no OpenRGB required");
-            ui.colored_label(egui::Color32::YELLOW, "Lian Li fan/LCD control remains disabled. Keep L-Connect services running.");
-            ui.separator();
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.heading("Software updates · GitHub Releases");
-                let updater_status_path = std::env::var_os("LOCALAPPDATA")
-                    .map(PathBuf::from).unwrap_or_else(std::env::temp_dir)
-                    .join("LianLite").join("updater-last-status.txt");
-                if let Ok(last_status) = fs::read_to_string(&updater_status_path) {
-                    ui.collapsing("Last update diagnostics", |ui| {
-                        ui.monospace(last_status);
-                        ui.small(format!("Log: {}", updater_status_path.display()));
-                    });
-                }
-                ui.label("Release repository: quanghuy2203/LianLite");
-                ui.horizontal(|ui| {
-                    if ui.add_enabled(self.update_rx.is_none(), egui::Button::new("Check for updates")).clicked() {
-                        let (tx, rx) = mpsc::channel(); self.update_rx = Some(rx);
-                        std::thread::spawn(move || { let _ = tx.send(update::check().map(UpdateMessage::Checked)); });
-                    }
-                    if let Some(a) = self.available.clone() {
-                        if ui.add_enabled(self.update_rx.is_none(), egui::Button::new(format!("Download v{}", a.version))).clicked() {
-                            let (tx, rx) = mpsc::channel(); self.update_rx = Some(rx);
-                            std::thread::spawn(move || { let _ = tx.send(update::stage(&a).map(UpdateMessage::Staged)); });
-                        }
-                    }
-                    if let Some(ref path) = self.staged {
-                        if ui.button("Install & restart").clicked() {
-                            match update::launch_helper(path) {
-                                Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-                                Err(e) => self.status = format!("Cannot install: {e}"),
-                            }
-                        }
-                    }
-                });
-                if self.update_rx.is_some() { ui.spinner(); ui.label("Working in background..."); }
-                ui.separator();
-                ui.heading("Profiles · Local preview only");
-                ui.horizontal(|ui| {
-                    for preset in [profile::Preset::Silent, profile::Preset::Balanced, profile::Preset::Performance] {
-                        if ui.button(preset.name()).clicked() {
-                            profile::apply(&mut self.config, preset);
-                            self.status = format!("{} local preview applied. Hardware unchanged.", preset.name());
-                        }
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Global RGB preview:");
-                    let mut global = egui::Color32::from_rgb(self.global_color[0], self.global_color[1], self.global_color[2]);
-                    if ui.color_edit_button_srgba(&mut global).changed() {
-                        self.global_color = [global.r(), global.g(), global.b()];
-                    }
-                    if ui.button("Sync preview color").clicked() {
-                        profile::all_same_color(&mut self.config, self.global_color);
-                        self.status = "Preview colors matched across all fan groups. No USB writes.".into();
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.add(egui::Slider::new(&mut self.global_brightness, 0..=100).text("Global brightness"));
-                    if ui.button("Apply brightness preview").clicked() {
-                        profile::all_brightness(&mut self.config, self.global_brightness);
-                        self.status = "Preview brightness set on fans and Strimers. Hardware unchanged.".into();
-                    }
-                });
-                ui.separator();
-                ui.heading("Fan groups");
-                for group in &mut self.config.groups {
-                    ui.group(|ui| {
-                        ui.label(format!("{} ({} fans)", group.name, group.count));
-                        ui.add(egui::Slider::new(&mut group.speed_percent, 20..=100).text("Speed % · preview"));
-                        ui.add(egui::Slider::new(&mut group.brightness, 0..=100).text("RGB brightness · preview"));
-                        let mut color = egui::Color32::from_rgb(group.rgb[0], group.rgb[1], group.rgb[2]);
-                        if ui.color_edit_button_srgba(&mut color).changed() { group.rgb = [color.r(), color.g(), color.b()]; }
-                    });
-                }
-                ui.heading("Strimer Wireless");
-                for (i, brightness) in self.config.strimer_brightness.iter_mut().enumerate() {
-                    ui.add(egui::Slider::new(brightness, 0..=100).text(format!("Strimer {} · brightness preview", i + 1)));
-                }
-                if ui.button("Save local profile").clicked() {
-                    self.status = match save(&self.config) { Ok(()) => format!("Saved to {}", config_path().display()), Err(e) => e };
-                }
-                ui.separator();
-                ui.heading("Native hardware detection");
-                ui.label("ASUS ROG Strix B650E-F · HID candidate 0B05:19AF");
-                ui.label("ZOTAC RTX 4070 Ti Trinity OC · SPECTRA protocol not yet confirmed");
-                ui.label("Lexar ARES V2 DDR5 · RGB chip and SMBus access not yet verified");
-                ui.colored_label(egui::Color32::YELLOW, "All native drivers are read-only. No RGB, SMBus, GPU or fan writes.");
-                ui.horizontal(|ui| {
-                    if ui.add_enabled(self.native_rx.is_none(), egui::Button::new("Detect ASUS + Lian Li HID")).clicked() {
-                        let (tx,rx)=mpsc::channel(); self.native_rx=Some(rx);
-                        std::thread::spawn(move || { let _=tx.send(native::scan_hid().map(NativeMessage::Scanned)); });
-                    }
-                    if ui.add_enabled(self.native_rx.is_none(), egui::Button::new("Detect GPU + RAM")).clicked() {
-                        let (tx,rx)=mpsc::channel(); self.native_rx=Some(rx);
-                        std::thread::spawn(move || { let _=tx.send(native::scan_gpu_and_memory().map(NativeMessage::SystemScanned)); });
-                    }
-                    if ui.button("Export native report").clicked() {
-                        self.status = if self.native_windows_json.is_empty() {
-                            "Use Detect GPU + RAM before exporting native report".into()
-                        } else {
-                            match native::export_report(&self.native_devices, &self.native_windows_json) {
-                                Ok(path) => format!("Saved {}. Review IDs before sharing.",path.display()),
-                                Err(e) => format!("Export failed: {e}"),
-                            }
-                        };
-                    }
-                });
-                if self.native_rx.is_some() { ui.spinner(); }
-                for d in &self.native_devices {
-                    ui.label(format!("{}: {} ({}) IF={} UsagePage={:04X}",d.kind,d.name,d.id,d.interface,d.usage_page));
-                    ui.small(d.driver);
-                }
-                ui.horizontal(|ui| {
-                    if ui.add_enabled(self.native_rx.is_none(), egui::Button::new("Inspect ASUS Aura (read-only)")).clicked() {
-                        let (tx,rx)=mpsc::channel(); self.native_rx=Some(rx);
-                        std::thread::spawn(move || { let _=tx.send(native::inspect_aura_pnp().map(NativeMessage::AuraInspected)); });
-                    }
-                    if ui.add_enabled(!self.aura_pnp_json.is_empty(), egui::Button::new("Export ASUS report")).clicked() {
-                        self.status = match native::export_aura_report(&self.aura_pnp_json) {
-                            Ok(path) => format!("ASUS PnP report saved: {}. Review InstanceId before sharing.", path.display()),
-                            Err(e) => format!("ASUS export failed: {e}"),
-                        };
-                    }
-                });
-                ui.collapsing("ASUS Aura Windows PnP properties", |ui| {
-                    ui.monospace(&self.aura_pnp_json);
-                });
-                ui.collapsing("GPU/RAM inventory (read-only)", |ui| {
-                    ui.monospace(&self.native_windows_json);
-                });
-                ui.separator();
-                ui.heading("Reports and logs");
-                if ui.button("Open LianLite reports folder").clicked() {
-                    let base = std::env::var_os("APPDATA").map(PathBuf::from)
-                        .unwrap_or_else(|| PathBuf::from("."));
-                    let folder = base.join("LianLite");
-                    self.status = match fs::create_dir_all(&folder)
-                        .and_then(|_| Command::new("explorer.exe").arg(&folder).spawn().map(|_| ())) {
-                        Ok(()) => "Reports folder opened in Explorer".into(),
-                        Err(e) => format!("Cannot open reports folder: {e}"),
-                    };
-                }
-                ui.separator();
-                ui.heading("Update and installation health");
-                if ui.button("Check install / updater").clicked() {
-                    match health::inspect() {
-                        Ok(h) => self.status = format!(
-                            "Updater: {} | Backup: {} | Older backup: {} | Pending: {}",
-                            if h.updater_present {"present"} else {"missing"},
-                            h.backup_present, h.old_backup_present, h.pending_present
-                        ),
-                        Err(e) => self.status = format!("Health check failed: {e}"),
-                    }
-                }
-                ui.horizontal(|ui| {
-                    if ui.button("Export privacy-safe diagnostic summary").clicked() {
-                        match health::inspect() {
-                            Ok(h) => {
-                                let summary = diagnostics::summary(
-                                    &self.native_devices, &self.native_windows_json, &self.aura_pnp_json, &h
-                                );
-                                self.last_summary = serde_json::to_string_pretty(&summary).unwrap_or_default();
-                                self.status = match diagnostics::export(&summary) {
-                                    Ok(path) => format!("Saved {}. No PnP instance IDs included.", path.display()),
-                                    Err(e) => format!("Summary export error: {e}"),
-                                };
-                            }
-                            Err(e) => self.status = format!("Summary error: {e}"),
-                        }
-                    }
-                });
-                ui.collapsing("Shareable summary preview", |ui| { ui.monospace(&self.last_summary); });
-                ui.separator();
-                ui.heading("Hardware diagnostics");
-                ui.horizontal(|ui| {
-                    if ui.button("Scan Lian Li HID").clicked() {
-                        match scan_hid() {
-                            Ok(items) => { self.status = format!("Found {} matching HID interface(s)", items.len()); self.hid = items; }
-                            Err(e) => self.status = format!("Scan error: {e}"),
-                        }
-                    }
-                    if ui.button("Export HID JSON").clicked() {
-                        let path = config_path().with_file_name("hid-inventory.json");
-                        let result = fs::create_dir_all(path.parent().unwrap())
-                            .and_then(|_| fs::write(&path, serde_json::to_vec_pretty(&self.hid).unwrap_or_default()));
-                        self.status = match result { Ok(()) => format!("Exported {}", path.display()), Err(e) => e.to_string() };
-                    }
-                    if ui.button("Check Lian Li processes").clicked() { self.process_report = read_lianli_processes(); }
+        let mut visuals = egui::Visuals::dark();
+        visuals.panel_fill = egui::Color32::from_rgb(13, 17, 28);
+        visuals.window_fill = egui::Color32::from_rgb(19, 24, 36);
+        visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(32, 40, 55);
+        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(41, 59, 78);
+        visuals.selection.bg_fill = egui::Color32::from_rgb(49, 123, 169);
+        ctx.set_visuals(visuals);
+        let cyan = egui::Color32::from_rgb(90, 213, 230);
+        let muted = egui::Color32::from_rgb(147, 165, 186);
+        let card = egui::Color32::from_rgb(24, 31, 46);
+        let border = egui::Stroke::new(1.0, egui::Color32::from_rgb(47, 59, 76));
 
-                });
-                for entry in &self.hid {
-                    ui.label(format!("{} {} · VID:{} PID:{} · interface {} · usage page {:04X}", entry.manufacturer, entry.product, entry.vid, entry.pid, entry.interface, entry.usage_page));
+        egui::SidePanel::left("navigation")
+            .resizable(false).exact_width(188.0)
+            .frame(egui::Frame::none().fill(egui::Color32::from_rgb(15, 22, 36)).inner_margin(18.0))
+            .show(ctx, |ui| {
+                ui.add_space(14.0);
+                ui.label(egui::RichText::new("LIANLITE").size(23.0).strong().color(cyan));
+                ui.label(egui::RichText::new("RUST NATIVE  /  v0.9").size(10.0).color(muted));
+                ui.add_space(35.0);
+                for (page, label) in [
+                    (Page::Overview, "  Overview"),
+                    (Page::Devices, "  Devices"),
+                    (Page::Diagnostics, "  Diagnostics"),
+                    (Page::Updates, "  Updates"),
+                ] {
+                    if ui.add_sized([156.0, 38.0],
+                        egui::SelectableLabel::new(self.page == page, label)).clicked() {
+                        self.page = page;
+                    }
+                    ui.add_space(9.0);
                 }
-                ui.label("Native report is read-only. Review device identifiers before sharing.");
-                ui.label("Matching process names (read-only):");
-                ui.monospace(&self.process_report);
-                ui.separator(); ui.label(&self.status);
+                ui.add_space(22.0);
+                ui.separator();
+                ui.add_space(12.0);
+                ui.label(egui::RichText::new("SAFE MODE").color(cyan).strong().size(11.0));
+                ui.label(egui::RichText::new("Read-only hardware access").color(muted).size(11.0));
+                ui.label(egui::RichText::new("No OpenRGB required").color(muted).size(11.0));
             });
-        });
+
+        egui::TopBottomPanel::bottom("status_bar")
+            .frame(egui::Frame::none().fill(egui::Color32::from_rgb(16, 23, 36)).inner_margin(12.0))
+            .show(ctx, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new("STATUS").strong().color(cyan));
+                    ui.label(egui::RichText::new(&self.status).color(muted));
+                });
+            });
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().inner_margin(22.0))
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.heading(match self.page {
+                        Page::Overview => "Your lighting dashboard",
+                        Page::Devices => "Connected hardware",
+                        Page::Diagnostics => "Hardware diagnostics",
+                        Page::Updates => "Application updates",
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(egui::RichText::new("v0.9.0").color(cyan).strong());
+                    });
+                });
+                ui.label(egui::RichText::new(
+                    "Windows 11  /  Minimal resources  /  Hardware changes locked until verified"
+                ).color(muted).size(12.0));
+                ui.add_space(18.0);
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    match self.page {
+                        Page::Overview => {
+                            ui.columns(4, |columns| {
+                                for (col, title, value, info) in [
+                                    (0, "LCD FANS", "05", "3 + 2 groups"),
+                                    (1, "TL FANS", "03", "one group"),
+                                    (2, "STRIMERS", "02", "Wireless"),
+                                    (3, "PROFILES", "03", "local previews"),
+                                ] {
+                                    egui::Frame::none().fill(card)
+                                        .rounding(egui::Rounding::same(12))
+                                        .stroke(border).inner_margin(14.0)
+                                        .show(&mut columns[col], |ui| {
+                                            ui.label(egui::RichText::new(title).size(10.0).color(muted));
+                                            ui.label(egui::RichText::new(value).size(29.0).strong().color(cyan));
+                                            ui.label(egui::RichText::new(info).size(11.0).color(muted));
+                                        });
+                                }
+                            });
+                            ui.add_space(18.0);
+                            egui::Frame::none().fill(card).rounding(egui::Rounding::same(12))
+                                .stroke(border).inner_margin(17.0).show(ui, |ui| {
+                                    ui.heading("Quick profiles");
+                                    ui.label(egui::RichText::new("Preview only: these controls do not change fan speed or RGB hardware.").color(muted));
+                                    ui.add_space(8.0);
+                                    ui.horizontal(|ui| {
+                                        for preset in [profile::Preset::Silent, profile::Preset::Balanced, profile::Preset::Performance] {
+                                            if ui.button(preset.name()).clicked() {
+                                                profile::apply(&mut self.config, preset);
+                                                self.status = format!("{} profile preview selected. No hardware writes.", preset.name());
+                                            }
+                                        }
+                                    });
+                                    ui.add_space(10.0);
+                                    ui.horizontal(|ui| {
+                                        ui.label("Global preview color");
+                                        let mut color = egui::Color32::from_rgb(
+                                            self.global_color[0], self.global_color[1], self.global_color[2]);
+                                        if ui.color_edit_button_srgba(&mut color).changed() {
+                                            self.global_color = [color.r(), color.g(), color.b()];
+                                        }
+                                        if ui.button("Sync preview color").clicked() {
+                                            profile::all_same_color(&mut self.config, self.global_color);
+                                            self.status = "Local fan group RGB preview synchronized.".into();
+                                        }
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.add(egui::Slider::new(&mut self.global_brightness, 0..=100).text("Brightness"));
+                                        if ui.button("Apply preview").clicked() {
+                                            profile::all_brightness(&mut self.config, self.global_brightness);
+                                            self.status = "Local brightness preview synchronized.".into();
+                                        }
+                                    });
+                                });
+                            ui.add_space(16.0);
+                            ui.heading("Fan zones");
+                            for group in &mut self.config.groups {
+                                egui::Frame::none().fill(card).rounding(egui::Rounding::same(11))
+                                    .stroke(border).inner_margin(15.0).show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.label(egui::RichText::new(&group.name).strong().size(15.0));
+                                            ui.label(egui::RichText::new(format!("{} fans", group.count)).color(muted));
+                                        });
+                                        ui.horizontal(|ui| {
+                                            ui.add(egui::Slider::new(&mut group.speed_percent, 20..=100).text("Speed preview %"));
+                                            ui.add(egui::Slider::new(&mut group.brightness, 0..=100).text("RGB brightness"));
+                                            let mut color = egui::Color32::from_rgb(group.rgb[0], group.rgb[1], group.rgb[2]);
+                                            if ui.color_edit_button_srgba(&mut color).changed() {
+                                                group.rgb = [color.r(), color.g(), color.b()];
+                                            }
+                                        });
+                                    });
+                                ui.add_space(8.0);
+                            }
+                            egui::Frame::none().fill(card).rounding(egui::Rounding::same(11))
+                                .stroke(border).inner_margin(15.0).show(ui, |ui| {
+                                    ui.heading("Strimer Wireless");
+                                    for (index, brightness) in self.config.strimer_brightness.iter_mut().enumerate() {
+                                        ui.add(egui::Slider::new(brightness, 0..=100)
+                                            .text(format!("Strimer {} brightness preview", index + 1)));
+                                    }
+                                    if ui.button("Save local profile").clicked() {
+                                        self.status = match save(&self.config) {
+                                            Ok(()) => "Local profile saved".into(), Err(e) => e,
+                                        };
+                                    }
+                                });
+                        }
+                        Page::Devices => {
+                            egui::Frame::none().fill(card).rounding(egui::Rounding::same(12))
+                                .stroke(border).inner_margin(17.0).show(ui, |ui| {
+                                    ui.heading("Native device discovery");
+                                    ui.label(egui::RichText::new("These buttons only inspect device IDs. No RGB control commands are sent.").color(muted));
+                                    ui.add_space(9.0);
+                                    ui.horizontal_wrapped(|ui| {
+                                        if ui.add_enabled(self.native_rx.is_none(), egui::Button::new("Detect ASUS + Lian Li HID")).clicked() {
+                                            let (tx,rx) = mpsc::channel(); self.native_rx = Some(rx);
+                                            std::thread::spawn(move || { let _ = tx.send(native::scan_hid().map(NativeMessage::Scanned)); });
+                                        }
+                                        if ui.add_enabled(self.native_rx.is_none(), egui::Button::new("Detect GPU + RAM")).clicked() {
+                                            let (tx,rx) = mpsc::channel(); self.native_rx = Some(rx);
+                                            std::thread::spawn(move || { let _ = tx.send(native::scan_gpu_and_memory().map(NativeMessage::SystemScanned)); });
+                                        }
+                                    });
+                                    if self.native_rx.is_some() { ui.spinner(); }
+                                    for d in &self.native_devices {
+                                        ui.label(format!("{}  |  {}  |  {}  |  IF {}", d.kind, d.name, d.id, d.interface));
+                                    }
+                                    if self.native_devices.is_empty() { ui.label(egui::RichText::new("Scan to list USB HID controllers").color(muted)); }
+                                    ui.collapsing("GPU and RAM raw inventory", |ui| { ui.monospace(&self.native_windows_json); });
+                                });
+                            ui.add_space(14.0);
+                            egui::Frame::none().fill(card).rounding(egui::Rounding::same(12))
+                                .stroke(border).inner_margin(17.0).show(ui, |ui| {
+                                    ui.heading("ASUS ROG Strix B650E-F");
+                                    ui.label("AURA 0B05:19AF  |  MI_00 WinUSB candidate  |  MI_02 HID FF72:00A1");
+                                    ui.colored_label(egui::Color32::from_rgb(246, 194, 107),
+                                        "Protocol NOT verified. All writes disabled.");
+                                    ui.horizontal_wrapped(|ui| {
+                                        if ui.add_enabled(self.native_rx.is_none(), egui::Button::new("Inspect ASUS PnP")).clicked() {
+                                            let (tx,rx) = mpsc::channel(); self.native_rx = Some(rx);
+                                            std::thread::spawn(move || { let _ = tx.send(native::inspect_aura_pnp().map(NativeMessage::AuraInspected)); });
+                                        }
+                                        if ui.add_enabled(self.native_rx.is_none(), egui::Button::new("Read HID descriptor")).clicked() {
+                                            let (tx,rx) = mpsc::channel(); self.native_rx = Some(rx);
+                                            std::thread::spawn(move || { let _ = tx.send(aura_descriptor::inspect().map(NativeMessage::DescriptorInspected)); });
+                                        }
+                                    });
+                                    for desc in &self.aura_descriptor {
+                                        ui.label(format!("HID interface {}: {} descriptor bytes", desc.interface, desc.length));
+                                    }
+                                    ui.collapsing("ASUS PnP details", |ui| { ui.monospace(&self.aura_pnp_json); });
+                                });
+                        }
+                        Page::Diagnostics => {
+                            egui::Frame::none().fill(card).rounding(egui::Rounding::same(12))
+                                .stroke(border).inner_margin(18.0).show(ui, |ui| {
+                                    ui.heading("Export diagnostic reports");
+                                    ui.label(egui::RichText::new("For the summary, scan Devices first. Raw PnP reports can include device identifiers.").color(muted));
+                                    ui.add_space(8.0);
+                                    ui.horizontal_wrapped(|ui| {
+                                        if ui.button("Export safe summary").clicked() {
+                                            match health::inspect() {
+                                                Ok(h) => {
+                                                    let value = diagnostics::summary(&self.native_devices, &self.native_windows_json,
+                                                        &self.aura_pnp_json, &h);
+                                                    self.last_summary = serde_json::to_string_pretty(&value).unwrap_or_default();
+                                                    self.status = match diagnostics::export(&value) {
+                                                        Ok(path) => format!("Summary saved: {}",path.display()),
+                                                        Err(e) => format!("Export error: {e}"),
+                                                    };
+                                                }
+                                                Err(e) => self.status = e,
+                                            }
+                                        }
+                                        if ui.add_enabled(!self.aura_descriptor.is_empty(), egui::Button::new("Export HID descriptor")).clicked() {
+                                            self.status = match aura_descriptor::export(&self.aura_descriptor) {
+                                                Ok(path) => format!("ASUS descriptor saved: {}",path.display()),
+                                                Err(e) => e,
+                                            };
+                                        }
+                                        if ui.add_enabled(!self.aura_pnp_json.is_empty(), egui::Button::new("Export ASUS PnP")).clicked() {
+                                            self.status = match native::export_aura_report(&self.aura_pnp_json) {
+                                                Ok(path) => format!("ASUS PnP report saved: {}",path.display()),
+                                                Err(e) => e,
+                                            };
+                                        }
+                                        if ui.button("Open reports folder").clicked() {
+                                            let root = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+                                            let dir = root.join("LianLite");
+                                            self.status = match fs::create_dir_all(&dir)
+                                                .and_then(|_| Command::new("explorer.exe").arg(&dir).spawn().map(|_| ())) {
+                                                Ok(()) => "Reports folder opened".into(),
+                                                Err(e) => format!("Cannot open reports: {e}"),
+                                            };
+                                        }
+                                    });
+                                    ui.collapsing("Shareable summary preview", |ui| { ui.monospace(&self.last_summary); });
+                                });
+                            ui.add_space(14.0);
+                            egui::Frame::none().fill(card).rounding(egui::Rounding::same(12))
+                                .stroke(border).inner_margin(18.0).show(ui, |ui| {
+                                    ui.heading("Lian Li process health");
+                                    ui.horizontal_wrapped(|ui| {
+                                        if ui.button("Check Lian Li services").clicked() {
+                                            self.process_report = read_lianli_processes();
+                                        }
+                                        if ui.button("Scan Lian Li HID").clicked() {
+                                            match scan_hid() {
+                                                Ok(devices) => { self.status = format!("{} Lian Li HID entries", devices.len()); self.hid = devices; }
+                                                Err(e) => self.status = e,
+                                            }
+                                        }
+                                    });
+                                    ui.collapsing("Lian Li process details", |ui| { ui.monospace(&self.process_report); });
+                                });
+                        }
+                        Page::Updates => {
+                            egui::Frame::none().fill(card).rounding(egui::Rounding::same(12))
+                                .stroke(border).inner_margin(18.0).show(ui, |ui| {
+                                    ui.heading("GitHub Releases updater");
+                                    ui.label(egui::RichText::new("quanghuy2203/LianLite").color(cyan));
+                                    ui.add_space(9.0);
+                                    ui.horizontal_wrapped(|ui| {
+                                        if ui.add_enabled(self.update_rx.is_none(), egui::Button::new("Check for updates")).clicked() {
+                                            let (tx,rx) = mpsc::channel(); self.update_rx = Some(rx);
+                                            std::thread::spawn(move || { let _ = tx.send(update::check().map(UpdateMessage::Checked)); });
+                                        }
+                                        if let Some(version) = self.available.clone() {
+                                            if ui.add_enabled(self.update_rx.is_none(), egui::Button::new(format!("Download v{}",version.version))).clicked() {
+                                                let (tx,rx) = mpsc::channel(); self.update_rx = Some(rx);
+                                                std::thread::spawn(move || { let _ = tx.send(update::stage(&version).map(UpdateMessage::Staged)); });
+                                            }
+                                        }
+                                        if let Some(ref staged) = self.staged {
+                                            if ui.button("Install & restart").clicked() {
+                                                match update::launch_helper(staged) {
+                                                    Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                                                    Err(e) => self.status = format!("Cannot install: {e}"),
+                                                }
+                                            }
+                                        }
+                                    });
+                                    if self.update_rx.is_some() { ui.spinner(); }
+                                    ui.label(egui::RichText::new("The update replaces both application and updater. Old backups are kept for recovery.").color(muted));
+                                });
+                            ui.add_space(14.0);
+                            egui::Frame::none().fill(card).rounding(egui::Rounding::same(12))
+                                .stroke(border).inner_margin(18.0).show(ui, |ui| {
+                                    ui.heading("Installation health");
+                                    if ui.button("Check updater and backups").clicked() {
+                                        self.status = match health::inspect() {
+                                            Ok(h) => format!("Updater: {} | Backup: {} | Previous: {} | Pending: {}",
+                                                h.updater_present, h.backup_present, h.old_backup_present, h.pending_present),
+                                            Err(e) => e,
+                                        };
+                                    }
+                                    let path = std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
+                                        .unwrap_or_else(std::env::temp_dir).join("LianLite");
+                                    if let Ok(text) = fs::read_to_string(path.join("updater-last-status.txt")) {
+                                        ui.collapsing("Last update log", |ui| { ui.monospace(text); });
+                                    }
+                                    if let Ok(text) = fs::read_to_string(path.join("updater-last-error.txt")) {
+                                        ui.collapsing("Last update error", |ui| { ui.monospace(text); });
+                                    }
+                                });
+                        }
+                    }
+                });
+            });
     }
 }
 fn main() -> eframe::Result<()> {
-    let options = eframe::NativeOptions { viewport: egui::ViewportBuilder::default().with_inner_size([730.0, 720.0]), ..Default::default() };
+    let options = eframe::NativeOptions { viewport: egui::ViewportBuilder::default().with_inner_size([1060.0, 740.0]), ..Default::default() };
     eframe::run_native("LianLite", options, Box::new(|_| Ok(Box::new(App::default()))))
 }
