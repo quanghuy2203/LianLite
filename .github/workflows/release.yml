@@ -36,6 +36,8 @@ jobs:
           Compress-Archive -Path target/release/lianlite.exe,target/release/lianlite-updater.exe -DestinationPath dist/LianLite-Portable-Windows-x64.zip
           $hash = (Get-FileHash dist/lianlite-windows-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  lianlite-windows-x64.zip" | Set-Content -Encoding ascii dist/lianlite-windows-x64.zip.sha256
+          $portableHash = (Get-FileHash dist/LianLite-Portable-Windows-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$portableHash  LianLite-Portable-Windows-x64.zip" | Set-Content -Encoding ascii dist/LianLite-Portable-Windows-x64.zip.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: LianLite-Windows
@@ -59,7 +61,8 @@ jobs:
             'dist/lianlite-windows-x64.zip',
             'dist/lianlite-windows-x64.zip.sha256',
             'dist/lianlite-updater.exe',
-            'dist/LianLite-Portable-Windows-x64.zip'
+            'dist/LianLite-Portable-Windows-x64.zip',
+            'dist/LianLite-Portable-Windows-x64.zip.sha256'
           )
           gh release create $tag $assets --target '${{ github.sha }}' --title $tag --generate-notes --repo $repo
           if ($LASTEXITCODE -ne 0) { throw "Could not publish $tag" }
