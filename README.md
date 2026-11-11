@@ -1,4 +1,4 @@
-# LianLite v0.13.0 — Experimental native L-Wireless V1 GetDev discovery
+# LianLite v0.14.0 — Safe wireless parser validation and Windows WinUSB fixes
 
 LianLite is a native Rust GUI for **read-only diagnostics** and **local configuration previews**. No OpenRGB installation is required.
 
@@ -195,3 +195,22 @@ https://github.com/sgtaziz/lian-li-linux/blob/main/crates/lianli-devices/src/wir
 https://github.com/qdellp/wirelesscanvas-rgb/blob/main/TECHNICAL.md
 
 This release keeps the improved v0.12 USB LCD receiver inventory, fully offline L-Connect saved configuration research, combined support snapshot and v0.11.1 backup retention.
+
+## v0.14.0 — Test without taking over cooling hardware
+
+**New on Devices:** `Test parser + group UI (simulation only)` loads a fully synthetic receiver page with fan counts **2, 3, 3** and **two Strimer records**. It exercises the same 42-byte GetDev decoder used for real data, without USB I/O, stopping L-Connect, changing RGB or altering PWM. The simulation is **always explicitly labeled** and is never stored in `live_topology`, so the dashboard's real `RX REPORTED GROUPS` stays `?` when live discovery is unavailable. `Clear simulated groups` removes the demo.
+
+**Safety and reliability fixes:** The native WinUSB backend now opens the device **synchronously** to match its synchronous `WinUsb_ReadPipe`/`WinUsb_WritePipe` calls; previously it used `FILE_FLAG_OVERLAPPED` with null OVERLAPPED pointers, which was incompatible. Process ownership checks recognize additional L-Connect GUI names and remain fail-closed for the known service/watchdog; exclusive USB open is still required. The offline Windows PnP survey hides its PowerShell console. Offline diagnostics no longer incorrectly say that GetDev does not exist.
+
+**Decoder correctness:** A zeroed MAC/identity field is no longer used to deduplicate distinct records. The test suite now checks synthetic topology, zero-ID handling, invalid headers and oversized claims, plus the existing group, RPM, Strimer and truncated-response cases.
+
+**Not yet solved:** No real RF discovery is possible while L-Connect's service owns the V1 RX. This release **does not** expose fan/RGB/LCD writes and **does not** disable or stop L-Connect. The simulated 2+3+3+Strimer groups are test fixtures, **not evidence of actual device grouping**.
+
+### Validation after GitHub Windows CI succeeds
+1. Update to v0.14.0 using **Updates**.
+2. Open **Devices**, click **Test parser + group UI (simulation only)**. Expect 5 *synthetic* groups, fan counts 2,3,3,0,0, with a prominent simulation warning.
+3. Check **Overview → RX REPORTED GROUPS** remains `?` (not fake 5).
+4. Click **Clear simulated groups** and verify test groups disappear.
+5. Leave L-Connect services running. A direct GetDev probe should still be refused by the safety guard.
+
+This validation demonstrates the decoder and UI pipeline only; it is not hardware verification.

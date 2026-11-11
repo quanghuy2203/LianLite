@@ -54,9 +54,14 @@ fn windows_dongles() -> Result<(Vec<DongleEvidence>, usize), String> {
 @(Get-PnpDevice -PresentOnly | Where-Object {
   $_.InstanceId -match 'VID_(0416&PID_804[01]|1A86&PID_E30[45]|1CBE&PID_0006)'
 } | Select-Object -ExpandProperty InstanceId) | ConvertTo-Json -Compress"#;
-    let output = Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", code])
-        .output().map_err(|e| e.to_string())?;
+    let mut query = Command::new("powershell.exe");
+    query.args(["-NoProfile", "-NonInteractive", "-Command", code]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        query.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let output = query.output().map_err(|e| e.to_string())?;
     if !output.status.success() {
         return Err(format!("PnP query failed: {}", String::from_utf8_lossy(&output.stderr)));
     }
@@ -142,7 +147,7 @@ pub fn scan() -> DiscoveryReport {
     let mut warnings = vec![
         "USB PnP detects only adapters, NOT wireless fan groups.".to_string(),
         "FanQuantity comes from historical L-Connect settings; do not treat as live devices.".to_string(),
-        "RF GetDev channel discovery is not implemented; no USB commands are sent.".to_string(),
+        "This offline scan does not send GetDev. Direct V1 probe is a separate guarded action.".to_string(),
     ];
     let (dongles, lcd_usb_receivers) = match windows_dongles() {
         Ok((adapters, count)) => (adapters, Some(count)),
@@ -165,7 +170,7 @@ pub fn export(report: &DiscoveryReport) -> Result<PathBuf,String> {
     let root = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
     let dir = root.join("LianLite");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let path = dir.join("wireless-discovery-v012.json");
+    let path = dir.join("wireless-discovery-v014.json");
     let json = serde_json::to_vec_pretty(report).map_err(|e|e.to_string())?;
     fs::write(&path,json).map_err(|e|e.to_string())?;
     Ok(path)

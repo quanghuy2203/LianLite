@@ -94,6 +94,7 @@ struct App {
     wireless_report: Option<discovery::DiscoveryReport>,
     wireless_settings: Option<wireless_research::ResearchReport>,
     live_topology: Option<wireless_protocol::LiveTopology>,
+    simulated_topology: Option<wireless_protocol::LiveTopology>,
     confirm_backup_cleanup: bool,
     confirm_preview_reset: bool,
 }
@@ -109,7 +110,7 @@ impl Default for App {
             update_rx: None, available: None, staged: None,
             native_rx: Some(rx), native_devices: vec![], native_windows_json: String::new(), aura_pnp_json: String::new(),
             global_color: [100,150,255], global_brightness: 70, last_summary: String::new(),
-            page: Page::Overview, aura_descriptor: Vec::new(), wireless_report: None, wireless_settings: None, live_topology: None, confirm_backup_cleanup: false, confirm_preview_reset: false }
+            page: Page::Overview, aura_descriptor: Vec::new(), wireless_report: None, wireless_settings: None, live_topology: None, simulated_topology: None, confirm_backup_cleanup: false, confirm_preview_reset: false }
     }
 }
 impl eframe::App for App {
@@ -221,7 +222,7 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 ui.add_space(14.0);
                 ui.label(egui::RichText::new("LIANLITE").size(23.0).strong().color(cyan));
-                ui.label(egui::RichText::new("RUST NATIVE  /  v0.13").size(10.0).color(muted));
+                ui.label(egui::RichText::new("RUST NATIVE  /  v0.14").size(10.0).color(muted));
                 ui.add_space(35.0);
                 for (page, label) in [
                     (Page::Overview, "  Overview"),
@@ -262,7 +263,7 @@ impl eframe::App for App {
                         Page::Updates => "Application updates",
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new("v0.13.0").color(cyan).strong());
+                        ui.label(egui::RichText::new("v0.14.0").color(cyan).strong());
                     });
                 });
                 ui.label(egui::RichText::new(
@@ -460,10 +461,33 @@ impl eframe::App for App {
                                         "GetDev reads real receiver group records (fan count, family, RF channel, RPM). Requires exclusive access: will refuse while L-Connect service/watchdog is running. Never stops services or adjusts fan PWM."
                                     ).color(muted));
                                     if ui.add_enabled(self.native_rx.is_none(), egui::Button::new("Probe actual RF groups (guarded)")).clicked() {
+                                        // Do not leave a previous receiver snapshot displayed if the
+                                        // next attempt is blocked or fails.
+                                        self.live_topology = None;
+                                        self.status = "Checking L-Connect ownership before optional receiver query...".into();
                                         let (tx,rx) = mpsc::channel(); self.native_rx = Some(rx);
                                         std::thread::spawn(move || {
                                             let _ = tx.send(wireless_winusb::probe().map(NativeMessage::LiveDiscovered));
                                         });
+                                    }
+                                    ui.horizontal(|ui| {
+                                        if ui.button("Test parser + group UI (simulation only)").clicked() {
+                                            self.simulated_topology = Some(wireless_protocol::simulated_topology());
+                                            self.status = "Synthetic 2+3+3 fan groups and 2 Strimers loaded for UI test. No USB accessed.".into();
+                                        }
+                                        if self.simulated_topology.is_some() &&
+                                            ui.button("Clear simulated groups").clicked() {
+                                            self.simulated_topology = None;
+                                            self.status = "Simulation cleared. Hardware inventory unchanged.".into();
+                                        }
+                                    });
+                                    if let Some(demo) = &self.simulated_topology {
+                                        ui.colored_label(egui::Color32::from_rgb(246, 194, 107),
+                                            "SIMULATION — not real devices, not a detected topology");
+                                        for group in &demo.groups {
+                                            ui.label(format!("Test channel {}: {} — {} fan(s) — RPM {:?}",
+                                                group.channel, group.kind, group.fan_count, group.fan_rpm));
+                                        }
                                     }
                                     if let Some(topology) = &self.live_topology {
                                         ui.label(format!("Receiver reports {} record(s). Valid device records: {}",
