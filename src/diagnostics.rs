@@ -14,6 +14,23 @@ pub fn summary(hid: &[NativeDevice], gpu_ram: &str, aura_pnp: &str, health: &Hea
         .unwrap_or_default();
     let aura: Value = serde_json::from_str(aura_pnp).unwrap_or(Value::Null);
     let aura_entries = aura.get("DeviceCount").and_then(Value::as_u64).unwrap_or(0);
+    let aura_devices = aura.get("Devices").and_then(Value::as_array);
+    let find_interface = |interface: &str| -> bool {
+        aura_devices.map(|list| list.iter().any(|d| {
+            d.get("InstanceId").and_then(Value::as_str)
+                .is_some_and(|s| s.contains("VID_0B05&PID_19AF") && s.contains(interface))
+        })).unwrap_or(false)
+    };
+    let winusb_compatible = aura_devices.map(|list| list.iter().any(|d| {
+        d.get("Properties").and_then(Value::as_array).is_some_and(|props| {
+            props.iter().any(|p| {
+                p.get("Key").and_then(Value::as_str) == Some("DEVPKEY_Device_CompatibleIds")
+                    && p.get("Value").and_then(Value::as_array).is_some_and(|ids| ids.iter().any(|id| {
+                        id.as_str() == Some("USB\\\\MS_COMP_WINUSB")
+                    }))
+            })
+        })
+    })).unwrap_or(false);
     let aura_found = hid.iter().any(|d| d.id == "VID_0B05&PID_19AF");
     let lianli_found = hid.iter().any(|d| d.id == "VID_1A86&PID_2107");
     json!({
@@ -26,6 +43,12 @@ pub fn summary(hid: &[NativeDevice], gpu_ram: &str, aura_pnp: &str, health: &Hea
             "DistinctHidUsages": hid.len()
         },
         "AsusPnPEntries": aura_entries,
+        "AsusInterfaceCandidates": {
+            "MI_00": find_interface("MI_00"),
+            "MI_02": find_interface("MI_02"),
+            "WinUSBCompatible": winusb_compatible,
+            "CommandProtocolVerified": false
+        },
         "GpuNames": graphic_names,
         "RamPartNumbers": ram_parts,
         "Updater": {
@@ -49,6 +72,17 @@ pub fn export(summary: &Value) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test] fn aura_detects_interfaces_but_redacts_instance_ids() {
+        let h = Health { version: "0.8.0", updater_present: true, backup_present: false,
+            old_backup_present: false, pending_present: false,
+            last_update_status: None, last_update_error: None };
+        let aura = r#"{"DeviceCount":2,"Devices":[{"InstanceId":"USB\\VID_0B05&PID_19AF&MI_00\\PRIVATE","Properties":[{"Key":"DEVPKEY_Device_CompatibleIds","Value":["USB\\MS_COMP_WINUSB"]}]},{"InstanceId":"HID\\VID_0B05&PID_19AF&MI_02\\PRIVATE","Properties":[]}]}"#;
+        let report = summary(&[], "{}", aura, &h);
+        assert_eq!(report["AsusInterfaceCandidates"]["MI_00"], true);
+        assert_eq!(report["AsusInterfaceCandidates"]["MI_02"], true);
+        assert_eq!(report["AsusInterfaceCandidates"]["WinUSBCompatible"], true);
+        assert!(!report.to_string().contains("PRIVATE"));
+    }
     #[test] fn privacy_no_instance_id() {
         let h = Health { version: "0.8.0", updater_present: true, backup_present: false,
             old_backup_present: false, pending_present: false,
