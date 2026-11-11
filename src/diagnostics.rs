@@ -26,7 +26,7 @@ pub fn summary(hid: &[NativeDevice], gpu_ram: &str, aura_pnp: &str, health: &Hea
             props.iter().any(|p| {
                 p.get("Key").and_then(Value::as_str) == Some("DEVPKEY_Device_CompatibleIds")
                     && p.get("Value").and_then(Value::as_array).is_some_and(|ids| ids.iter().any(|id| {
-                        id.as_str() == Some("USB\\\\MS_COMP_WINUSB")
+                        id.as_str().is_some_and(|v| v.ends_with("MS_COMP_WINUSB") && v.starts_with("USB"))
                     }))
             })
         })
