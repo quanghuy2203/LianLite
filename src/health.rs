@@ -28,7 +28,17 @@ pub fn inspect() -> Result<Health, String> {
         version: env!("CARGO_PKG_VERSION"),
         updater_present: dir.join("lianlite-updater.exe").is_file(),
         backup_present: exe.with_extension("exe.backup").is_file(),
-        old_backup_present: exe.with_extension("exe.backup.previous").is_file(),
+        old_backup_present: fs::read_dir(dir).ok().is_some_and(|items|
+            items.flatten().any(|entry| {
+                let filename = entry.file_name();
+                filename.to_str().is_some_and(|name|
+                    name == "lianlite.exe.backup.previous" ||
+                    name.strip_prefix("lianlite.exe.backup.previous.")
+                        .is_some_and(|suffix| !suffix.is_empty() &&
+                            suffix.bytes().all(|b| b.is_ascii_digit()))
+                )
+            })
+        ),
         pending_present: exe.with_extension("exe.pending").is_file(),
         last_update_status: read_bounded(logs.join("updater-last-status.txt")),
         last_update_error: read_bounded(logs.join("updater-last-error.txt")),
