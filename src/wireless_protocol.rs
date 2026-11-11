@@ -26,6 +26,7 @@ pub struct LiveTopology {
     pub incomplete_page: bool,
     pub local_master_binding_verified: bool,
     pub source: &'static str,
+    pub simulated: bool,
 }
 pub fn describe_type(device_type: u8, fan_types: &[u8]) -> &'static str {
     match device_type {
@@ -87,7 +88,10 @@ pub fn parse_getdev(response: &[u8]) -> Result<LiveTopology, String> {
     for i in 0..count {
         let start = 4 + i*RECORD_BYTES;
         let record = &response[start..start+RECORD_BYTES];
-        if !seen.insert(record[0..6].to_vec()) {continue;}
+        // An all-zero MAC is an absent identity, not evidence of duplication.
+        // Some firmware revisions leave this field unset.
+        if record[0..6].iter().any(|&byte| byte != 0)
+            && !seen.insert(record[0..6].to_vec()) { continue; }
         if let Some(group) = parse_one(record, i) {
             groups.push(group);
         }
@@ -97,8 +101,40 @@ pub fn parse_getdev(response: &[u8]) -> Result<LiveTopology, String> {
         groups, total_receiver_records: count,
         valid_records, incomplete_page: false, local_master_binding_verified: false,
         source: "L-Wireless V1 GetDev RX response; not a saved fan profile",
+        simulated: false,
     })
 }
+
+/// Deterministic synthetic payload for validating the UI and parser without
+/// opening a USB device or contacting L-Connect. Never use as detected hardware.
+pub fn simulated_topology() -> LiveTopology {
+    let mut packet = vec![0x10, 5, 0, 0];
+    for (index, device_type, fan_count, channel, fan_type) in [
+        (1u8, 0u8, 2u8, 1u8, 29u8),
+        (2, 0, 3, 2, 29),
+        (3, 0, 3, 3, 29),
+        (4, 2, 0, 4, 0),
+        (5, 3, 0, 5, 0),
+    ] {
+        let mut record = [0u8; RECORD_BYTES];
+        record[0] = index;
+        record[12] = channel;
+        record[18] = device_type;
+        record[19] = fan_count;
+        record[24] = fan_type;
+        for fan in 0..fan_count as usize {
+            let rpm = 320u16 + (fan as u16 * 40);
+            record[28 + fan*2..30 + fan*2].copy_from_slice(&rpm.to_be_bytes());
+        }
+        record[41] = 0x1C;
+        packet.extend_from_slice(&record);
+    }
+    let mut result = parse_getdev(&packet).expect("synthetic packet must be valid");
+    result.simulated = true;
+    result.source = "SYNTHETIC TEST DATA — NOT DETECTED HARDWARE";
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,6 +148,25 @@ mod tests {
         let mut raw = vec![0x10, items.len() as u8, 0, 0];
         for item in items {raw.extend(item);}
         raw
+    }
+    #[test] fn synthetic_five_groups_are_never_reported_as_hardware() {
+        let report=simulated_topology();
+        assert!(report.simulated);
+        assert_eq!(report.groups.len(),5);
+        assert_eq!(report.groups.iter().map(|g|g.fan_count).collect::<Vec<_>>(),vec![2,3,3,0,0]);
+        assert!(!report.local_master_binding_verified);
+        assert!(report.source.contains("SYNTHETIC"));
+    }
+    #[test] fn zero_identity_does_not_collapse_distinct_records() {
+        let mut a=record(0,2,1,0);
+        let mut b=record(0,3,2,0);
+        a[0]=0; b[0]=0;
+        let report=parse_getdev(&page(vec![a,b])).unwrap();
+        assert_eq!(report.groups.len(),2);
+    }
+    #[test] fn oversized_claims_are_rejected() {
+        assert!(parse_getdev(&[0x10,13,0,0]).is_err());
+        assert!(parse_getdev(&[]).is_err());
     }
     #[test] fn maps_real_receiver_fan_group_counts() {
         let topology = parse_getdev(&page(vec![
