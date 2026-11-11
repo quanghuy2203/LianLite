@@ -1,4 +1,6 @@
 #![windows_subsystem = "windows"]
+#[path = "../backups.rs"]
+mod backups;
 use std::{fs, path::{Path, PathBuf}, process::Command, thread, time::Duration};
 
 fn state_dir() -> PathBuf {
@@ -122,7 +124,18 @@ fn run() -> Result<(), String> {
             let error_file = state_dir().join("updater-last-error.txt");
             let _ = fs::remove_file(error_file);
             match install_new_helper(&target) {
-                Ok(()) => log("App and updater installed; app is running. Older backups retained."),
+                Ok(()) => {
+                    // Only after main restart AND helper replacement succeed do we
+                    // prune superseded archives. Current main rollback is preserved.
+                    match backups::cleanup(dir) {
+                        Ok(result) => log(&format!(
+                            "App and updater updated. {} old backups removed, {} rollback files kept. Cleanup errors: {}",
+                            result.deleted, result.retained,
+                            if result.failed.is_empty() { "none".to_string() } else { result.failed.join(" | ") }
+                        )),
+                        Err(e) => log(&format!("Update succeeded; old-backup cleanup failed: {e}")),
+                    }
+                },
                 Err(e) => log(&format!("Main app updated and running; updater replacement needs attention: {e}")),
             }
             Ok(())
