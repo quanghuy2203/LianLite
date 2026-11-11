@@ -6,6 +6,7 @@ mod health;
 mod diagnostics;
 mod aura_descriptor;
 mod discovery;
+mod wireless_research;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf, process::Command, sync::mpsc::{self, Receiver}};
@@ -67,7 +68,7 @@ fn read_lianli_processes() -> String {
     }
 }
 enum UpdateMessage { Checked(Option<update::Available>), Staged(update::Staged) }
-enum NativeMessage { Scanned(Vec<native::NativeDevice>), SystemScanned(String), AuraInspected(String), DescriptorInspected(Vec<aura_descriptor::DescriptorInfo>), WirelessDiscovered(discovery::DiscoveryReport) }
+enum NativeMessage { Scanned(Vec<native::NativeDevice>), SystemScanned(String), AuraInspected(String), DescriptorInspected(Vec<aura_descriptor::DescriptorInfo>), WirelessDiscovered(discovery::DiscoveryReport), SettingsInspected(wireless_research::ResearchReport) }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Page { Overview, Devices, Diagnostics, Updates }
 struct App {
@@ -84,6 +85,7 @@ struct App {
     page: Page,
     aura_descriptor: Vec<aura_descriptor::DescriptorInfo>,
     wireless_report: Option<discovery::DiscoveryReport>,
+    wireless_settings: Option<wireless_research::ResearchReport>,
 }
 impl Default for App {
     fn default() -> Self {
@@ -97,7 +99,7 @@ impl Default for App {
             update_rx: None, available: None, staged: None,
             native_rx: Some(rx), native_devices: vec![], native_windows_json: String::new(), aura_pnp_json: String::new(),
             global_color: [100,150,255], global_brightness: 70, last_summary: String::new(),
-            page: Page::Overview, aura_descriptor: Vec::new(), wireless_report: None }
+            page: Page::Overview, aura_descriptor: Vec::new(), wireless_report: None, wireless_settings: None }
     }
 }
 impl eframe::App for App {
@@ -139,6 +141,12 @@ impl eframe::App for App {
                 Ok(Ok(NativeMessage::AuraInspected(report))) => {
                     self.aura_pnp_json = report;
                     self.status = "ASUS Aura PnP inspection completed (read-only)".into();
+                    self.native_rx = None;
+                }
+                Ok(Ok(NativeMessage::SettingsInspected(report))) => {
+                    self.status = format!("L-Connect saved settings: {} records, {} distinct type/shape entries. No live RF query.",
+                        report.typed_records, report.record_types.len());
+                    self.wireless_settings = Some(report);
                     self.native_rx = None;
                 }
                 Ok(Ok(NativeMessage::WirelessDiscovered(report))) => {
@@ -346,6 +354,7 @@ impl eframe::App for App {
                             egui::Frame::none().fill(card).rounding(egui::Rounding::same(12.0_f32))
                                 .stroke(border).inner_margin(17.0).show(ui, |ui| {
                                     ui.heading("Native device discovery");
+                                    ui.label(egui::RichText::new("Live wireless group discovery is unavailable while L-Connect owns the WinUSB TX/RX devices. No services are stopped.").color(muted));
                                     if ui.add_enabled(self.native_rx.is_none(), egui::Button::new("Refresh wireless adapter + saved settings")).clicked() {
                                         let (tx,rx)=mpsc::channel(); self.native_rx=Some(rx);
                                         std::thread::spawn(move || { let _=tx.send(Ok(NativeMessage::WirelessDiscovered(discovery::scan()))); });
@@ -405,6 +414,28 @@ impl eframe::App for App {
                             egui::Frame::none().fill(card).rounding(egui::Rounding::same(12.0_f32))
                                 .stroke(border).inner_margin(18.0).show(ui, |ui| {
                                     ui.heading("Export diagnostic reports");
+                                    ui.add_space(7.0);
+                                    ui.heading("L-Connect saved-settings schema (offline)");
+                                    if ui.add_enabled(self.native_rx.is_none(), egui::Button::new("Analyze saved setting types")).clicked() {
+                                        let (tx,rx) = mpsc::channel(); self.native_rx = Some(rx);
+                                        std::thread::spawn(move || { let _ = tx.send(Ok(NativeMessage::SettingsInspected(wireless_research::inspect()))); });
+                                    }
+                                    if let Some(report) = &self.wireless_settings {
+                                        ui.label(format!("{} readable typed records; {} different type / value shapes",
+                                            report.typed_records, report.record_types.len()));
+                                        for record in &report.record_types {
+                                            ui.label(format!("{}  ·  {}  ·  {} record(s){}",
+                                                record.setting_type, record.value_shape, record.records,
+                                                if record.wireless_candidate { "  ·  wireless candidate (unverified)" } else { "" }));
+                                        }
+                                        if ui.button("Export schema summary (no IDs)").clicked() {
+                                            self.status = match wireless_research::export(report) {
+                                                Ok(path) => format!("Saved offline schema to {}",path.display()),
+                                                Err(e) => format!("Schema export error: {e}"),
+                                            };
+                                        }
+                                    }
+                                    ui.separator();
                                     if let Some(report) = &self.wireless_report {
                                         if ui.button("Export read-only wireless inventory").clicked() {
                                             self.status = match discovery::export(report) {
