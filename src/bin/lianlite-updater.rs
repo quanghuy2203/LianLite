@@ -1,6 +1,15 @@
+#![windows_subsystem = "windows"]
 use std::{fs, path::PathBuf, process::Command, thread, time::Duration};
 fn main() {
-    if let Err(e) = run() { eprintln!("LianLite update failed: {e}"); std::process::exit(1); }
+    if let Err(e) = run() {
+        // GUI subsystem has no terminal: write errors to a file the user can inspect.
+        let base = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::env::temp_dir());
+        let dir = base.join("LianLite");
+        let _ = fs::create_dir_all(&dir);
+        let _ = fs::write(dir.join("updater-last-error.txt"), format!("LianLite update failed: {e}\n"));
+        std::process::exit(1);
+    }
 }
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args_os().collect();
